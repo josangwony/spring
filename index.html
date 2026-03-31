@@ -1052,7 +1052,9 @@ function App(){
         const wb=XLSX.read(e.target.result,{type:'array'});
         const rows=XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]],{header:1});
         const nm={};
-        for(let i=2;i<rows.length;i++){const rw=rows[i];if(rw[0]&&rw[3])nm[rw[0]]={name:rw[2]||'',sc:rw[3],clr:rw[1]||'',sn:rw[5]||'',sg:rw[6]||'기타'}}
+        // 헤더 행 수 자동 감지: rows[1]에 실제 코드가 있으면 1행 헤더, 아니면 2행 헤더
+        const startRow=rows[1]&&rows[1][0]&&String(rows[1][0]).match(/^[A-Z0-9]/)?1:2;
+        for(let i=startRow;i<rows.length;i++){const rw=rows[i];if(rw[0]&&rw[3])nm[rw[0]]={name:rw[2]||'',sc:rw[3],clr:rw[1]||'',sn:rw[5]||'',sg:rw[6]||'기타'}}
         setMap(nm);LS('map',nm);
         show(`매핑 ${Object.keys(nm).length}건 등록 완료`);
       }catch{show('매핑 파일 오류','err')}
