@@ -318,11 +318,22 @@ function Login({onLogin}){
   const[vis,setVis]=useState({today:0,total:0});
   useEffect(()=>{
     const now=new Date();const todayKey=`${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`;
-    const saved=LS('visitors')||{total:0,todayCount:0,todayKey:''};
-    const isNewDay=saved.todayKey!==todayKey;
-    const newData={total:saved.total+1,todayCount:isNewDay?1:saved.todayCount+1,todayKey};
-    LS('visitors',newData);
-    setVis({today:newData.todayCount,total:newData.total});
+    const increment=async()=>{
+      // Firebase에서 최신값 가져온 후 +1
+      let saved={total:0,todayCount:0,todayKey:''};
+      if(window.__fb){
+        const data=await window.__fb.get();
+        if(data.visitors){try{saved=JSON.parse(data.visitors)}catch{}}
+      } else {
+        saved=LS('visitors')||saved;
+      }
+      const isNewDay=saved.todayKey!==todayKey;
+      const newData={total:saved.total+1,todayCount:isNewDay?1:saved.todayCount+1,todayKey};
+      LS('visitors',newData);
+      setVis({today:newData.todayCount,total:newData.total});
+    };
+    if(window.__fbReady){increment();}
+    else{document.addEventListener('fbReady',increment,{once:true});}
   },[]);
 
   return(
