@@ -132,7 +132,7 @@ function LS(k,v){
 // Firebase → localStorage 동기화 (앱 로드 시 1회 + 실시간)
 async function syncFromFirebase(){
   if(!window.__fb)return;
-  const SYNC_KEYS=['baseInv','txns','map','hist','plan','mp','capacity'];
+  const SYNC_KEYS=['baseInv','txns','map','hist','plan','mp','capacity','visitors'];
   try{
     const data=await window.__fb.get();
     SYNC_KEYS.forEach(k=>{
@@ -1091,7 +1091,7 @@ function App(){
       // 실시간 리스너
       if(window.__fb){
         window.__fb.listen(data=>{
-          KEYS.forEach(k=>{
+          ['baseInv','txns','map','hist','plan','mp','capacity','visitors'].forEach(k=>{
             if(data[k]!==undefined){
               try{localStorage.setItem('si_'+k,typeof data[k]==='string'?data[k]:JSON.stringify(data[k]))}catch{}
             }
