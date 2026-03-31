@@ -9,10 +9,9 @@
 <script src="https://cdn.jsdelivr.net/npm/@babel/standalone@7.24.0/babel.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <script src="https://cdn.tailwindcss.com"></script>
-<script type="module">
-  import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
-  import { getFirestore, doc, getDoc, setDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
-
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
+<script>
   const firebaseConfig = {
     apiKey: "AIzaSyASvYYsqz9G9pFqu8SbKUtLAm0cbBwsCpQ",
     authDomain: "spring-6bcfc.firebaseapp.com",
@@ -21,22 +20,20 @@
     messagingSenderId: "175959905760",
     appId: "1:175959905760:web:7b6ffc1c839fcf0c27c785"
   };
+  firebase.initializeApp(firebaseConfig);
+  const _db = firebase.firestore();
+  const _DOC = _db.collection("springdb").doc("main");
 
-  const app = initializeApp(firebaseConfig);
-  const db = getFirestore(app);
-  const DOC = doc(db, "springdb", "main");
-
-  // Firestore → window 브릿지
   window.__fb = {
     get: async () => {
-      try { const s = await getDoc(DOC); return s.exists() ? s.data() : {}; }
+      try { const s = await _DOC.get(); return s.exists ? s.data() : {}; }
       catch(e) { console.warn("FB get error", e); return {}; }
     },
     set: async (key, val) => {
-      try { await setDoc(DOC, { [key]: JSON.stringify(val) }, { merge: true }); }
+      try { await _DOC.set({ [key]: JSON.stringify(val) }, { merge: true }); }
       catch(e) { console.warn("FB set error", e); }
     },
-    listen: (cb) => onSnapshot(DOC, (s) => { if(s.exists()) cb(s.data()); })
+    listen: (cb) => _DOC.onSnapshot(s => { if(s.exists) cb(s.data()); })
   };
   window.__fbReady = true;
   document.dispatchEvent(new Event('fbReady'));
