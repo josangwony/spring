@@ -149,6 +149,7 @@ function detectFile(h,raw){
   if(s.includes('투입일')&&s.includes('설비명'))return 'proc';
   if(s.includes('생산일')&&s.includes('제품코드')&&s.includes('생산량'))return 'pkg';
   if(s.includes('제품코드')&&s.includes('제품명')&&s.includes('합계'))return 'weekplan';
+  if(s.includes('품목코드')&&s.includes('포장계획일')&&s.includes('계획량'))return 'pkgplan';
   return null;
 }
 
@@ -483,24 +484,7 @@ function Dash({inv,map,hist,onUp,isA,plan,mp,sd,codes,groups}){
         </tbody>
       </table>
     </div>
-    {isA&&<div className="grid grid-cols-2 gap-4">
-      <div className="border border-gray-200 rounded-lg p-4">
-        <h3 className="text-sm font-medium mb-2">ERP 데이터 업로드</h3>
-        <div className="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center cursor-pointer hover:border-blue-300 hover:bg-blue-50/50"
-          onClick={()=>{const i=document.createElement('input');i.type='file';i.accept='.xls,.xlsx';i.onchange=e=>onUp(e.target.files[0]);i.click()}}>
-          <p className="text-xs text-gray-500">클릭하여 .xls 파일 선택</p>
-          <p className="text-xs text-gray-400 mt-1">포장실적 / 가공실적 / 생산계획 자동 인식</p>
-        </div>
-      </div>
-      <div className="border border-gray-200 rounded-lg p-4">
-        <h3 className="text-sm font-medium mb-2">최근 업로드 이력</h3>
-        {hist.length===0?<p className="text-xs text-gray-400 py-4 text-center">이력 없음</p>:
-          hist.slice(-5).reverse().map((h,i)=><div key={i} className="flex justify-between py-2 border-b border-gray-100 last:border-0">
-            <div className="flex gap-2 text-xs"><span className="text-gray-400">{h.d}</span><span>{h.f}</span></div>
-            <span className={`text-xs px-2 py-0.5 rounded ${h.s==='ok'?'bg-emerald-50 text-emerald-600':h.s==='dup'?'bg-amber-50 text-amber-600':'bg-red-50 text-red-600'}`}>{h.s==='ok'?'완료':h.s==='dup'?'중복':'오류'}</span>
-          </div>)}
-      </div>
-    </div>}
+
   </div>);
 }
 
@@ -1042,7 +1026,7 @@ function Inv({inv,setInv,save,capacity,setCapacity,sd,codes,groups}){
   </div>);
 }
 
-function MapMgr({map,setMap,onUp,sd}){
+function MapMgr({map,setMap,onUp,sd,hist}){
   const[sr,setSr]=useState('');
   const ent=Object.entries(map).filter(([k,v])=>!sr||k.includes(sr)||(v.name||'').includes(sr)||(v.sc||'').includes(sr));
   return(<div>
@@ -1069,6 +1053,20 @@ function MapMgr({map,setMap,onUp,sd}){
         </tr>)
       }</tbody></table>
     </div>
+    {(()=>{
+      // 모든 업로드 이력에서 미매핑 제품코드 수집 (중복 제거, 최신순)
+      const allUm=[...new Set((hist||[]).flatMap(h=>h.unmapped||[]))];
+      if(allUm.length===0)return null;
+      // 이미 매핑된 코드는 제외
+      const stillUm=allUm.filter(c=>!map[c]);
+      if(stillUm.length===0)return null;
+      return <div className="mt-4 border border-amber-200 rounded-lg p-4 bg-amber-50">
+        <div className="flex items-center justify-between mb-2">
+          <div className="text-xs font-medium text-amber-700">⚠ 미매핑 제품코드 ({stillUm.length}건) — 매핑 엑셀에 추가 후 재업로드하세요</div>
+        </div>
+        <div className="flex flex-wrap gap-1">{stillUm.map((c,i)=><span key={i} className="px-2 py-0.5 bg-white border border-amber-200 rounded text-xs text-amber-800 font-mono">{c}</span>)}</div>
+      </div>;
+    })()}
   </div>);
 }
 
@@ -1190,7 +1188,7 @@ function App(){
           addTxn(txId,items);
           let msg=`포장 실적 ${cnt}건 반영 (재고 차감)`;
           if(skip>0)msg+=`, 재포장/조정 ${skip}건 제외`;
-          if(um.length>0)msg+=`, 매핑 누락 ${um.length}건: ${[...new Set(um)].slice(0,3).join(', ')}`;
+          if(um.length>0){nh.unmapped=[...new Set(um)];msg+=`, 매핑 누락 ${nh.unmapped.length}건`;}
           show(msg,um.length>0?'warn':'ok');
         }else if(ft==='proc'){
           const hi={code:hd.indexOf('제품코드'),qty:hd.indexOf('생산량')};
@@ -1224,7 +1222,6 @@ function App(){
             const mi=map[code];
             let springCode=null;
             if(mi&&mi.sc)springCode=mi.sc;
-            else if(sd[code])springCode=code;
             if(!springCode){
               const hasQty=dateCols.some(dc=>(parseInt(rw[dc.ci])||0)>0);
               if(hasQty)um.push(code);
@@ -1250,11 +1247,71 @@ function App(){
           setPlan(merged);LS('plan',merged);
           nh.planData=np;
           const dateRange=dateCols.length>0?`${dateCols[0].date} ~ ${dateCols[dateCols.length-1].date}`:'';
-          if(um.length>0)show(`주간계획 병합 (${dateRange}): ${cnt}건, 매핑 누락 ${um.length}건: ${[...new Set(um)].slice(0,3).join(', ')}`,'warn');
+          if(um.length>0){nh.unmapped=[...new Set(um)];show(`주간계획 병합 (${dateRange}): ${cnt}건, 매핑 누락 ${nh.unmapped.length}건`,'warn');}
           else if(cnt>0)show(`주간계획 병합 (${dateRange}): 출고예정 ${cnt}건 추가`);
           else show('주간계획에서 매핑된 출고예정이 없습니다.','warn');
+        } else if(ft==='pkgplan'){
+          // 포장계획일지 파싱
+          // 규칙1: 계획차수에 '재포장'/'조정' 포함 시 제외
+          // 규칙2: 확정여부가 '강제마감'이면 계획량-생산량 남아도 제외
+          // 규칙3: 계획차수 빈칸 → 위 행의 계획차수 상속
+          // 규칙4: 포장1(스프링), 포장2(모션) 라인만 처리
+          if(Object.keys(map).length===0){show('매핑이 등록되지 않았습니다.','err');return}
+          // 날짜 파싱을 위해 raw:true로 재파싱
+          const rawWb=XLSX.read(e.target.result,{type:'array',cellDates:true});
+          const rawRows=XLSX.utils.sheet_to_json(rawWb.Sheets[rawWb.SheetNames[0]],{header:1,raw:true});
+          const ci={
+            code:hd.indexOf('품목코드'),
+            color:hd.indexOf('색상'),
+            date:hd.indexOf('포장계획일'),
+            plan:hd.indexOf('계획량'),
+            prod:hd.indexOf('생산량'),
+            planno:hd.indexOf('계획차수'),
+            confirm:hd.findIndex(h=>String(h||'').includes('확정여부'))
+          };
+          if(ci.code<0||ci.date<0||ci.plan<0){show('포장계획 파일 컬럼을 인식할 수 없습니다.','err');return}
+          const safeStr=(rw,idx)=>idx>=0&&idx<rw.length&&rw[idx]!=null?String(rw[idx]):'';
+          const np={};let cnt=0,um=[];
+          let lastPlanno='';
+          for(let i=1;i<rawRows.length;i++){
+            const rw=rawRows[i];
+            if(!rw[ci.code])continue;
+            // 계획차수 빈칸 상속
+            const rawPlanno=safeStr(rw,ci.planno).trim();
+            if(rawPlanno)lastPlanno=rawPlanno;
+            const planno=lastPlanno||'';
+            // 규칙1: 재포장/조정 제외
+            if(planno.includes('재포장')||planno.includes('조정'))continue;
+            // 규칙2: 강제마감 제외
+            if(safeStr(rw,ci.confirm).includes('강제마감'))continue;
+            const code=safeStr(rw,ci.code).trim();
+            // 날짜 파싱 (Excel 시리얼 or Date 객체 or 문자열)
+            const date=excelDateToISO(rw[ci.date]);
+            if(!date)continue;
+            const planQty=parseInt(rw[ci.plan])||0;
+            const prodQty=parseInt(rw[ci.prod])||0;
+            const remQty=planQty-prodQty;
+            if(remQty<=0)continue;
+            const color=safeStr(rw,ci.color).trim();
+            const mi=map[code+'_'+color]||map[code];
+            if(!mi||!mi.sc){um.push(code);continue}
+            const sc=mi.sc;
+            if(!np[sc])np[sc]=[];
+            const dup=np[sc].find(e=>e.date===date);
+            if(dup)dup.qty+=remQty; else np[sc].push({date,qty:remQty});
+            cnt++;
+          }
+          // pkgplan: 전체 출고예정 교체 + 이전 pkgplan active 해제
+          setPlan(np);LS('plan',np);
+          nh.planData=np;
+          nh.active=true;
+          if(um.length>0)nh.unmapped=[...new Set(um)];
+          const msg=`포장계획 반영: ${cnt}건 (기존 출고예정 교체)${um.length>0?`, 매핑 누락 ${nh.unmapped.length}건`:''}`;
+          show(msg,um.length>0?'warn':'ok');
         }
-        const h2=[...hist,nh];setHist(h2);LS('hist',h2);
+        // pkgplan이면 기존 pkgplan 이력 active 해제
+        const updHist=hist.map(h=>h.t==='pkgplan'?{...h,active:false}:h);
+        const h2=[...updHist,nh];setHist(h2);LS('hist',h2);
       }catch(er){show('파일 처리 오류: '+(er.message||''),'err')}
     };r.readAsArrayBuffer(file);
   };
@@ -1304,29 +1361,47 @@ function App(){
         </div>
         {tab==='dashboard'&&<Dash inv={inv} map={map} hist={hist} onUp={handleUp} isA={isA} plan={plan} mp={mp} sd={sd} codes={codes} groups={groups}/>}
         {tab==='planning'&&<Plan inv={inv} plan={plan} mp={mp} setMp={setMp} isA={isA} capacity={capacity} setCapacity={c=>{setCapacity(c);LS('capacity',c);}} sd={sd} codes={codes} groups={groups}/>}
-        {tab==='mapping'&&isA&&<MapMgr map={map} setMap={setMap} onUp={handleMapUp} sd={sd}/>}
+        {tab==='mapping'&&isA&&<MapMgr map={map} setMap={setMap} onUp={handleMapUp} sd={sd} hist={hist}/>}
         {tab==='inventory'&&isA&&<Inv inv={baseInv} setInv={setBaseInv} save={()=>saveBaseInv(baseInv)} capacity={capacity} setCapacity={c=>{setCapacity(c);LS('capacity',c);}} sd={sd} codes={codes} groups={groups}/>}
         {tab==='history'&&isA&&<div>
-          <div className="flex items-center justify-between mb-3">
-            <h2 className="text-sm font-medium">업로드 이력</h2>
-            <button onClick={()=>{if(!confirm('전체 업로드 이력을 초기화하시겠습니까?\n\n모든 실적 데이터, 출고예정, 가공 계획이 삭제되고\n재고가 초기 재고로 원복됩니다.'))return;setHist([]);LS('hist',[]);setTxns([]);LS('txns',[]);setPlan({});LS('plan',{});setMp({});LS('mp',{});show('전체 초기화 완료 (이력, 출고예정, 가공계획 모두 삭제)')}} className="text-xs text-gray-400 hover:text-gray-600">전체 초기화</button>
-          </div>
-          <div className="border border-gray-200 rounded-lg overflow-hidden mb-6">
-            <table className="w-full text-xs"><thead><tr className="bg-gray-50 border-b border-gray-200">
-              <th className="text-left px-3 py-2 font-medium text-gray-500">일시</th>
-              <th className="text-left px-3 py-2 font-medium text-gray-500">파일명</th>
-              <th className="text-left px-3 py-2 font-medium text-gray-500">유형</th>
-              <th className="text-left px-3 py-2 font-medium text-gray-500">상태</th>
-              <th className="text-center px-2 py-2 font-medium text-gray-500 w-10">삭제</th>
-            </tr></thead><tbody>
-              {hist.length===0?<tr><td colSpan={5} className="text-center py-6 text-gray-400">이력 없음</td></tr>:
-                hist.slice().reverse().map((h,ri)=>{const origIdx=hist.length-1-ri;return <tr key={ri} className="border-b border-gray-100 hover:bg-gray-50">
-                  <td className="px-3 py-2 text-gray-500">{h.d}</td><td className="px-3 py-2">{h.f}</td>
-                  <td className="px-3 py-2">{h.t==='pkg'?'포장 실적':h.t==='proc'?'가공 실적':'주간 생산계획'}</td>
-                  <td className="px-3 py-2"><span className={`px-2 py-0.5 rounded ${h.s==='ok'?'bg-emerald-50 text-emerald-600':h.s==='dup'?'bg-amber-50 text-amber-600':'bg-red-50 text-red-600'}`}>{h.s==='ok'?'완료':h.s==='dup'?'중복':'오류'}</span></td>
-                  <td className="text-center px-2 py-2"><button onClick={()=>deleteHist(origIdx)} className="text-gray-300 hover:text-red-500 transition-colors" title="삭제 시 재고 원복">🗑</button></td>
-                </tr>})}
-            </tbody></table>
+          <div className="grid grid-cols-2 gap-4 mb-4 items-start">
+            <div className="border border-gray-200 rounded-lg p-4 bg-[#FFFFFF]">
+              <h3 className="text-sm font-medium mb-2">ERP 데이터 업로드</h3>
+              <div className="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center cursor-pointer hover:border-blue-300 hover:bg-blue-50/50"
+                onClick={()=>{const i=document.createElement('input');i.type='file';i.accept='.xls,.xlsx';i.onchange=e=>handleUp(e.target.files[0]);i.click()}}>
+                <p className="text-xs text-gray-500">클릭하여 .xls 파일 선택</p>
+                <p className="text-xs text-gray-400 mt-1">포장실적 / 가공실적 / 생산계획 자동 인식</p>
+              </div>
+            </div>
+            <div>
+              <div className="flex items-center justify-between mb-3">
+                <h2 className="text-sm font-medium">업로드 이력</h2>
+                <button onClick={()=>{if(!confirm('전체 업로드 이력을 초기화하시겠습니까?\n\n모든 실적 데이터, 출고예정, 가공 계획이 삭제되고\n재고가 초기 재고로 원복됩니다.'))return;setHist([]);LS('hist',[]);setTxns([]);LS('txns',[]);setPlan({});LS('plan',{});setMp({});LS('mp',{});show('전체 초기화 완료 (이력, 출고예정, 가공계획 모두 삭제)')}} className="text-xs text-gray-400 hover:text-gray-600">전체 초기화</button>
+              </div>
+              <div className="border border-gray-200 rounded-lg overflow-auto" style={{maxHeight:200}}>
+                <table className="w-full text-xs"><thead><tr className="bg-gray-50 border-b border-gray-200">
+                  <th className="text-left px-3 py-2 font-medium text-gray-500">일시</th>
+                  <th className="text-left px-3 py-2 font-medium text-gray-500">파일명</th>
+                  <th className="text-left px-3 py-2 font-medium text-gray-500">유형</th>
+                  <th className="text-left px-3 py-2 font-medium text-gray-500">상태</th>
+                  <th className="text-center px-2 py-2 font-medium text-gray-500 w-10">적용</th>
+                </tr></thead><tbody>
+                  {hist.length===0?<tr><td colSpan={5} className="text-center py-6 text-gray-400">이력 없음</td></tr>:
+                    hist.slice().reverse().map((h,ri)=><tr key={ri} className="border-b border-gray-100 hover:bg-gray-50">
+                      <td className="px-3 py-2 text-gray-500">{h.d}</td>
+                      <td className="px-3 py-2">{h.f}</td>
+                      <td className="px-3 py-2">{h.t==='pkg'?'포장 실적':h.t==='proc'?'가공 실적':h.t==='pkgplan'?'포장 계획':h.t==='weekplan'?'주간 생산계획':'기타'}</td>
+                      <td className="px-3 py-2"><span className={`px-2 py-0.5 rounded ${h.s==='ok'?'bg-emerald-50 text-emerald-600':h.s==='dup'?'bg-amber-50 text-amber-600':'bg-red-50 text-red-600'}`}>{h.s==='ok'?'완료':h.s==='dup'?'중복':'오류'}</span></td>
+                      <td className="text-center px-2 py-2">
+                        {h.t==='pkgplan'
+                          ?(h.active?<span className="text-emerald-500 font-bold">✓</span>:<span className="text-gray-300">−</span>)
+                          :(h.s==='ok'?<span className="text-emerald-500 font-bold">✓</span>:h.s==='dup'?<span className="text-amber-400">−</span>:<span className="text-red-400">✕</span>)
+                        }
+                      </td>
+                    </tr>)}
+                </tbody></table>
+              </div>
+            </div>
           </div>
           <div className="flex items-center justify-between mb-3">
             <h2 className="text-sm font-medium">알림 로그</h2>
