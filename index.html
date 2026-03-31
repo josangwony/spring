@@ -9,6 +9,38 @@
 <script src="https://cdn.jsdelivr.net/npm/@babel/standalone@7.24.0/babel.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <script src="https://cdn.tailwindcss.com"></script>
+<script type="module">
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+  import { getFirestore, doc, getDoc, setDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+
+  const firebaseConfig = {
+    apiKey: "AIzaSyASvYYsqz9G9pFqu8SbKUtLAm0cbBwsCpQ",
+    authDomain: "spring-6bcfc.firebaseapp.com",
+    projectId: "spring-6bcfc",
+    storageBucket: "spring-6bcfc.firebasestorage.app",
+    messagingSenderId: "175959905760",
+    appId: "1:175959905760:web:7b6ffc1c839fcf0c27c785"
+  };
+
+  const app = initializeApp(firebaseConfig);
+  const db = getFirestore(app);
+  const DOC = doc(db, "springdb", "main");
+
+  // Firestore → window 브릿지
+  window.__fb = {
+    get: async () => {
+      try { const s = await getDoc(DOC); return s.exists() ? s.data() : {}; }
+      catch(e) { console.warn("FB get error", e); return {}; }
+    },
+    set: async (key, val) => {
+      try { await setDoc(DOC, { [key]: JSON.stringify(val) }, { merge: true }); }
+      catch(e) { console.warn("FB set error", e); }
+    },
+    listen: (cb) => onSnapshot(DOC, (s) => { if(s.exists()) cb(s.data()); })
+  };
+  window.__fbReady = true;
+  document.dispatchEvent(new Event('fbReady'));
+</script>
 <script>
 tailwind.config = {
   theme: {
@@ -90,7 +122,29 @@ function buildCodes(sd){
   return {sd,codes,groups};
 }
 
-function LS(k,v){if(v===undefined){try{const d=localStorage.getItem('si_'+k);return d?JSON.parse(d):null}catch{return null}}else{try{localStorage.setItem('si_'+k,JSON.stringify(v));return true}catch{return false}}}
+// LS: localStorage 캐시 + Firebase 비동기 동기화
+function LS(k,v){
+  if(v===undefined){
+    try{const d=localStorage.getItem('si_'+k);return d?JSON.parse(d):null}catch{return null}
+  } else {
+    try{localStorage.setItem('si_'+k,JSON.stringify(v))}catch{}
+    if(window.__fb)window.__fb.set(k,v);
+    return true;
+  }
+}
+// Firebase → localStorage 동기화 (앱 로드 시 1회 + 실시간)
+async function syncFromFirebase(){
+  if(!window.__fb)return;
+  const SYNC_KEYS=['baseInv','txns','map','hist','plan','mp','capacity'];
+  try{
+    const data=await window.__fb.get();
+    SYNC_KEYS.forEach(k=>{
+      if(data[k]!==undefined){
+        try{localStorage.setItem('si_'+k, typeof data[k]==='string'?data[k]:JSON.stringify(data[k]))}catch{}
+      }
+    });
+  }catch(e){console.warn('FB sync error',e)}
+}
 
 function detectFile(h,raw){
   const s=h.map(x=>String(x||''));
@@ -1022,6 +1076,42 @@ function App(){
   const[capacity,setCapacity]=useState(()=>LS('capacity')||260);
   const[toast,setToast]=useState(null);
   const[logs,setLogs]=useState(()=>LS('logs')||[]);
+  const[fbLoaded,setFbLoaded]=useState(false);
+
+  // Firebase 초기 동기화
+  useEffect(()=>{
+    const KEYS=['baseInv','txns','map','hist','plan','mp','capacity'];
+    const doSync=async()=>{
+      await syncFromFirebase();
+      setBaseInv(LS('baseInv')||LS('inv')||{});
+      setTxns(LS('txns')||[]);
+      setMap(LS('map')||{});
+      setHist(LS('hist')||[]);
+      setPlan(LS('plan')||{});
+      setMp(LS('mp')||{});
+      setCapacity(LS('capacity')||260);
+      setFbLoaded(true);
+      // 실시간 리스너
+      if(window.__fb){
+        window.__fb.listen(data=>{
+          KEYS.forEach(k=>{
+            if(data[k]!==undefined){
+              try{localStorage.setItem('si_'+k,typeof data[k]==='string'?data[k]:JSON.stringify(data[k]))}catch{}
+            }
+          });
+          setBaseInv(LS('baseInv')||{});
+          setTxns(LS('txns')||[]);
+          setMap(LS('map')||{});
+          setHist(LS('hist')||[]);
+          setPlan(LS('plan')||{});
+          setMp(LS('mp')||{});
+          setCapacity(LS('capacity')||260);
+        });
+      }
+    };
+    if(window.__fbReady){doSync();}
+    else{document.addEventListener('fbReady',doSync,{once:true});setTimeout(()=>{if(!fbLoaded)setFbLoaded(true)},3000);}
+  },[]);
 
   const {sd,codes,groups}=useMemo(()=>buildCodes(buildSD(map)),[map]);
 
@@ -1177,6 +1267,14 @@ function App(){
     show(`${h.f} 삭제 완료 (${h.t==='weekplan'?'출고예정':'재고'} 원복됨)`);
   };
 
+  if(!fbLoaded)return(
+    <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+      <div className="text-center">
+        <div className="w-8 h-8 border-2 border-red-600 border-t-transparent rounded-full animate-spin mx-auto mb-3"></div>
+        <div className="text-sm text-gray-500">데이터 불러오는 중...</div>
+      </div>
+    </div>
+  );
   if(!user)return <Login onLogin={setUser}/>;
   const isA=user.role==='admin';
   const tabs=isA?[['dashboard','대시보드'],['planning','계획 모드'],['mapping','매핑 관리'],['inventory','초기 재고'],['history','업로드 이력']]:[['dashboard','재고 현황'],['planning','계획 모드']];
