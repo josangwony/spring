@@ -81,6 +81,14 @@ tailwind.config = {
     from { opacity: 0; transform: translateY(-6px); }
     to   { opacity: 1; transform: translateY(0); }
   }
+  @keyframes urgentPulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.55; }
+  }
+  @keyframes fadeSlideUp {
+    from { opacity: 0; transform: translateY(8px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
 </style>
 
 
@@ -445,7 +453,7 @@ function Dash({inv,map,hist,onUp,isA,plan,mp,sd,codes,groups,completedCards,carr
   const warn=codes.filter(c=>{const q=inv[c]||0,o=(plan[c]||[]).reduce((a,b)=>a+b.qty,0),i=Object.values(mp[c]||{}).reduce((a,b)=>a+b,0);return q+i-o<=0}).length;
   // 어제 날짜 기준 생산완료 집계
   const yesterday=new Date();yesterday.setDate(yesterday.getDate()-1);
-  const yd=yesterday.toISOString().slice(0,10);
+  const yd=`${yesterday.getFullYear()}-${String(yesterday.getMonth()+1).padStart(2,'0')}-${String(yesterday.getDate()).padStart(2,'0')}`;
   const ydDay=['일','월','화','수','목','금','토'][yesterday.getDay()];
   const ydFmt=`${yesterday.getMonth()+1}/${yesterday.getDate()}(${ydDay})`;
   // key: {code}_{YYYY-MM-DD}_{line} → 마지막 _로 line, 그 앞 10자로 date
@@ -456,10 +464,8 @@ function Dash({inv,map,hist,onUp,isA,plan,mp,sd,codes,groups,completedCards,carr
     if(line!=='A'&&line!=='B')return;
     const date=k.slice(-12,-2); // YYYY-MM-DD
     if(date!==yd)return;
-    const code=k.slice(0,-13); // springCode (mp key)
-    // equipSchedule 대신 mp[code][date] 또는 기가공 plan에서 수량 찾기
-    // mp는 수기입력, plan은 출고예정 → 생산계획 수량은 mp[code][date]
-    const qty=(mp[code]||{})[date]||0;
+    const code=k.slice(0,-13); // springCode
+    const qty=typeof v==='object'?v.qty||0:0;
     if(!ydProduced[line][code])ydProduced[line][code]=0;
     ydProduced[line][code]+=qty;
   });
@@ -490,20 +496,57 @@ function Dash({inv,map,hist,onUp,isA,plan,mp,sd,codes,groups,completedCards,carr
 
       </div>
       <div className="grid grid-cols-2 gap-4">
-        <div className="bg-orange-50 rounded-lg p-3 border border-orange-100">
-          <div className="text-xs text-orange-600 font-medium mb-2">1라인 (기타)</div>
-          <div className="text-2xl font-medium text-orange-700">{ydQty.B.toLocaleString()}<span className="text-xs font-normal text-orange-400 ml-1">개</span></div>
-          {ydCarry.B>0&&<div className="text-xs text-orange-400 mt-0.5">이월 {ydCarry.B}개 →</div>}
-          {Object.keys(ydProduced.B).length>0&&<div className="mt-2 space-y-1">{Object.entries(ydProduced.B).map(([sc,q])=><div key={sc} className="flex justify-between text-xs"><span className="text-orange-500 truncate" style={{maxWidth:120}}>{sd[sc]?sd[sc].n:sc}</span><span className="text-orange-700 font-medium ml-2">{q}개</span></div>)}</div>}
-          {Object.keys(ydProduced.B).length===0&&<div className="text-xs text-orange-300 mt-1">완료 항목 없음</div>}
-        </div>
-        <div className="bg-blue-50 rounded-lg p-3 border border-blue-100">
-          <div className="text-xs text-blue-600 font-medium mb-2">2라인 (일룸/이브닝/키즈)</div>
-          <div className="text-2xl font-medium text-blue-700">{ydQty.A.toLocaleString()}<span className="text-xs font-normal text-blue-400 ml-1">개</span></div>
-          {ydCarry.A>0&&<div className="text-xs text-blue-400 mt-0.5">이월 {ydCarry.A}개 →</div>}
-          {Object.keys(ydProduced.A).length>0&&<div className="mt-2 space-y-1">{Object.entries(ydProduced.A).map(([sc,q])=><div key={sc} className="flex justify-between text-xs"><span className="text-blue-500 truncate" style={{maxWidth:120}}>{sd[sc]?sd[sc].n:sc}</span><span className="text-blue-700 font-medium ml-2">{q}개</span></div>)}</div>}
-          {Object.keys(ydProduced.A).length===0&&<div className="text-xs text-blue-300 mt-1">완료 항목 없음</div>}
-        </div>
+        {[{line:'B',label:'1라인 (기타)',borderC:'#f97316',bg:'#fff7ed',tc:'#c2410c',mc:'#fb923c',qty:ydQty.B,carry:ydCarry.B,prod:ydProduced.B},
+          {line:'A',label:'2라인 (일룸/이브닝/키즈)',borderC:'#3b82f6',bg:'#eff6ff',tc:'#1d4ed8',mc:'#60a5fa',qty:ydQty.A,carry:ydCarry.A,prod:ydProduced.A}
+        ].map(({line,label,borderC,bg,tc,mc,qty,carry,prod})=>
+          <div key={line} style={{background:bg,borderRadius:12,padding:'16px 20px',border:`1.5px solid ${borderC}22`,animation:'fadeSlideUp 0.4s ease',position:'relative',overflow:'hidden'}}>
+            <div style={{position:'absolute',top:0,left:0,width:4,height:'100%',background:borderC,borderRadius:'12px 0 0 12px'}}/>
+            <div style={{fontSize:11,fontWeight:600,color:tc,marginBottom:6,letterSpacing:0.3}}>{label}</div>
+            <div style={{display:'flex',alignItems:'baseline',gap:8,marginBottom:12}}>
+              <span style={{fontSize:32,fontWeight:700,color:tc,lineHeight:1}}>{qty.toLocaleString()}</span>
+              <span style={{fontSize:12,color:mc}}>개</span>
+              {carry>0&&<span style={{fontSize:10,color:'white',background:'#ef4444',borderRadius:4,padding:'3px 8px',marginLeft:6,fontWeight:700,letterSpacing:0.5,animation:'urgentPulse 1.5s ease-in-out infinite'}}>⚠ {carry}개 이월</span>}
+            </div>
+            {Object.keys(prod).length===0
+              ?<div style={{fontSize:11,color:mc}}>완료 항목 없음</div>
+              :(()=>{
+                // 그룹별 합산
+                const grpMap={};
+                const grpDetail={};
+                Object.entries(prod).forEach(([code,q])=>{
+                  const grp=sd[code]?sd[code].g:'기타';
+                  grpMap[grp]=(grpMap[grp]||0)+q;
+                  if(!grpDetail[grp])grpDetail[grp]=[];
+                  grpDetail[grp].push({size:getSizeKey(sd[code]?.n)||code,q});
+                });
+                return <div className="flex flex-col gap-1.5">{Object.entries(grpMap).map(([grp,total])=>{
+                  const grpColor=GC[grp]||'#6b7280';
+                  const grpBg=GB[grp]||'#f3f4f6';
+                  const details=grpDetail[grp]||[];
+                  const maxTotal=Math.max(...Object.values(grpMap));
+                  const barPct=Math.round((total/maxTotal)*100);
+                  return <div key={grp} className="relative group cursor-default"
+                    style={{borderRadius:8,overflow:'hidden',background:'#f3f4f6',height:38,animation:'fadeSlideUp 0.3s ease',transition:'transform 0.15s'}}
+                    onMouseEnter={e=>e.currentTarget.style.transform='translateY(-2px)'}
+                    onMouseLeave={e=>e.currentTarget.style.transform=''}>
+                    <div style={{position:'absolute',top:0,left:0,height:'100%',width:`${barPct}%`,background:grpBg,borderRadius:8,transition:'width 0.6s ease'}}/>
+                    <div style={{position:'absolute',inset:0,display:'flex',alignItems:'center',justifyContent:'space-between',padding:'0 12px'}}>
+                      <span style={{fontSize:11,color:grpColor,fontWeight:600}}>{grp}</span>
+                      <span style={{fontSize:16,fontWeight:800,color:grpColor}}>{total}<span style={{fontSize:10,fontWeight:500,marginLeft:2,opacity:0.75}}>개</span></span>
+                    </div>
+                    <div className="absolute bottom-full left-0 mb-2 hidden group-hover:block z-20" style={{minWidth:110}}>
+                      <div style={{background:'#1f2937',color:'white',borderRadius:8,padding:'8px 10px',fontSize:11,boxShadow:'0 4px 16px rgba(0,0,0,0.2)'}}>
+                        {details.map((d,i)=><div key={i} style={{display:'flex',justifyContent:'space-between',gap:12,marginBottom:i<details.length-1?3:0}}>
+                          <span style={{opacity:0.7}}>{d.size}</span><span style={{fontWeight:600}}>{d.q}개</span>
+                        </div>)}
+                      </div>
+                    </div>
+                  </div>;
+                })}</div>;
+              })()
+            }
+          </div>
+        )}
       </div>
     </div>
 
@@ -849,7 +892,8 @@ function Plan({inv,plan,mp,setMp,isA,capacity,setCapacity,sd,codes,groups,comple
               // 이월 날짜 수량 추가
               newMp[c]={...newMp[c],[carryPopup.toDate]:(newMp[c][carryPopup.toDate]||0)+moveQty};
               setMp(newMp);
-              const updLS={...LS('mp')||{}};updLS[c]=newMp[c];LS('mp',updLS);
+              LS('mp',newMp);
+              if(window.__fb)window.__fb.set({mp:newMp});
               // 이월 기록 저장
               const newLog=[...carryLog,{code:c,fromDate:carryPopup.fromDate,toDate:carryPopup.toDate,qty:moveQty,line:carryPopup.line,ts:new Date().toISOString()}];
               setCarryLog(newLog);LS('carryLog',newLog);
@@ -965,13 +1009,13 @@ function Plan({inv,plan,mp,setMp,isA,capacity,setCapacity,sd,codes,groups,comple
                   {items.map((item,ii)=>{
                     const isSplit=getLine(item.code,d)==='AB';
                     const ck=`${item.code}_${d}_${eq}`;
-                    const isDone=!!completedCards[ck];
+                    const isDone=completedCards[ck]!=null;
                     return <div key={ii} className="relative"
                       draggable={isA&&!isDone}
                       onDragStart={()=>isA&&!isDone&&setDragItem({code:item.code,date:d,lineQty:item.qty,totalQty:(mp[item.code]||{})[d]||0,fromLine:eq})}
                       onDragEnd={()=>setDragItem(null)}
                       style={{cursor:isA?'pointer':'default'}}
-                      onClick={e=>{if(isA){e.stopPropagation();toggleComplete(item.code,d,eq);}}}
+                      onClick={e=>{if(isA){e.stopPropagation();toggleComplete(item.code,d,eq,item.qty);}}}
                     >
                       {di>0&&changed&&ii===0&&<div className="absolute -left-1 top-1/2 w-2 h-2 rounded-full bg-red-400" title="교체 발생"></div>}
                       {isSplit&&<div className="absolute -top-1 -right-1 w-3 h-3 bg-purple-500 rounded-full text-white flex items-center justify-center" style={{fontSize:7}} title="분할 생산">2</div>}
@@ -1314,7 +1358,7 @@ function App(){
   const[fbLoaded,setFbLoaded]=useState(false);
   const[completedCards,setCompletedCards]=useState(()=>LS('completedCards')||{});
   const[carryLog,setCarryLog]=useState(()=>LS('carryLog')||[]);
-  const toggleComplete=(code,date,eq)=>{const k=`${code}_${date}_${eq}`;const n={...completedCards};if(n[k])delete n[k];else n[k]=true;setCompletedCards(n);LS('completedCards',n);if(window.__fb)window.__fb.set({completedCards:n});};
+  const toggleComplete=(code,date,eq,qty)=>{const k=`${code}_${date}_${eq}`;const n={...completedCards};if(n[k])delete n[k];else n[k]={qty:qty||0};setCompletedCards(n);LS('completedCards',n);if(window.__fb)window.__fb.set({completedCards:n});};
 
   // Firebase 초기 동기화
   useEffect(()=>{
