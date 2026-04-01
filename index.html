@@ -436,13 +436,41 @@ function WeeklyChart({plan}){
   return <canvas ref={canvasRef} height="140"/>;
 }
 
-function Dash({inv,map,hist,onUp,isA,plan,mp,sd,codes,groups}){
+function Dash({inv,map,hist,onUp,isA,plan,mp,sd,codes,groups,completedCards,carryLog}){
   const[expandedGroup,setExpandedGroup]=useState(null);
   const[flt,setFlt]=useState('전체');
   const[sort,setSort]=useState({col:null,asc:true});
   const[shortOnly,setShortOnly]=useState(false);
   const tot=Object.values(inv).reduce((a,b)=>a+b,0);
   const warn=codes.filter(c=>{const q=inv[c]||0,o=(plan[c]||[]).reduce((a,b)=>a+b.qty,0),i=Object.values(mp[c]||{}).reduce((a,b)=>a+b,0);return q+i-o<=0}).length;
+  // 어제 날짜 기준 생산완료 집계
+  const yesterday=new Date();yesterday.setDate(yesterday.getDate()-1);
+  const yd=yesterday.toISOString().slice(0,10);
+  const ydDay=['일','월','화','수','목','금','토'][yesterday.getDay()];
+  const ydFmt=`${yesterday.getMonth()+1}/${yesterday.getDate()}(${ydDay})`;
+  // key: {code}_{YYYY-MM-DD}_{line} → 마지막 _로 line, 그 앞 10자로 date
+  const ydProduced={A:{},B:{}}; // {line: {springCode: qty}}
+  Object.entries(completedCards||{}).forEach(([k,v])=>{
+    if(!v)return;
+    const line=k.slice(-1); // 'A' or 'B'
+    if(line!=='A'&&line!=='B')return;
+    const date=k.slice(-12,-2); // YYYY-MM-DD
+    if(date!==yd)return;
+    const code=k.slice(0,-13); // springCode (mp key)
+    // equipSchedule 대신 mp[code][date] 또는 기가공 plan에서 수량 찾기
+    // mp는 수기입력, plan은 출고예정 → 생산계획 수량은 mp[code][date]
+    const qty=(mp[code]||{})[date]||0;
+    if(!ydProduced[line][code])ydProduced[line][code]=0;
+    ydProduced[line][code]+=qty;
+  });
+  const ydQty={A:Object.values(ydProduced.A).reduce((a,b)=>a+b,0),B:Object.values(ydProduced.B).reduce((a,b)=>a+b,0)};
+  const ydTotal=ydQty.A+ydQty.B;
+  // 어제 날짜 기준 이월량 집계 (fromDate가 어제인 것)
+  const ydCarry={A:0,B:0};
+  (carryLog||[]).filter(l=>l.fromDate===yd).forEach(l=>{
+    if(l.line==='A')ydCarry.A+=l.qty;
+    else if(l.line==='B')ydCarry.B+=l.qty;
+  });
   const flBase=flt==='전체'?codes:codes.filter(c=>sd[c].g===flt);
   const getVals=c=>{const q=inv[c]||0,o=(plan[c]||[]).reduce((a,b)=>a+b.qty,0),i=Object.values(mp[c]||{}).reduce((a,b)=>a+b,0);return{q,o,i,av:q+i-o}};
   const flFiltered=shortOnly?flBase.filter(c=>getVals(c).av<=0):flBase;
@@ -450,11 +478,33 @@ function Dash({inv,map,hist,onUp,isA,plan,mp,sd,codes,groups}){
   const toggleSort=col=>setSort(s=>{if(s.col===col){if(s.asc)return{col,asc:false};return{col:null,asc:true}}return{col,asc:true}});
   const SH=({c,children})=><th onClick={()=>toggleSort(c)} className="text-right px-3 py-2 font-medium text-gray-500 w-20 whitespace-nowrap cursor-pointer hover:text-gray-700 select-none">{children}{sort.col===c?<span className="ml-0.5 text-blue-500">{sort.asc?'↑':'↓'}</span>:<span className="ml-0.5 text-gray-300">⇅</span>}</th>;
   return(<div>
-    <div className="grid grid-cols-4 gap-3 mb-5">
+    <div className="grid grid-cols-4 gap-3 mb-3">
       <MC l="총 스프링 품목" v="37" u="종" s="10개 그룹"/>
       <MC l="총 현재고" v={tot.toLocaleString()} u="개"/>
       <MC l="재고 부족 경고" v={warn} u="건" w={warn>0} s="가용재고 0 이하"/>
       <MC l="매핑 등록" v={Object.keys(map).length} u="건"/>
+    </div>
+    <div className="border border-gray-200 rounded-lg p-4 bg-[#FFFFFF] mb-5">
+      <div className="flex items-center justify-between mb-3">
+        <h3 className="text-sm font-medium">{ydFmt} 생산 현황</h3>
+
+      </div>
+      <div className="grid grid-cols-2 gap-4">
+        <div className="bg-orange-50 rounded-lg p-3 border border-orange-100">
+          <div className="text-xs text-orange-600 font-medium mb-2">1라인 (기타)</div>
+          <div className="text-2xl font-medium text-orange-700">{ydQty.B.toLocaleString()}<span className="text-xs font-normal text-orange-400 ml-1">개</span></div>
+          {ydCarry.B>0&&<div className="text-xs text-orange-400 mt-0.5">이월 {ydCarry.B}개 →</div>}
+          {Object.keys(ydProduced.B).length>0&&<div className="mt-2 space-y-1">{Object.entries(ydProduced.B).map(([sc,q])=><div key={sc} className="flex justify-between text-xs"><span className="text-orange-500 truncate" style={{maxWidth:120}}>{sd[sc]?sd[sc].n:sc}</span><span className="text-orange-700 font-medium ml-2">{q}개</span></div>)}</div>}
+          {Object.keys(ydProduced.B).length===0&&<div className="text-xs text-orange-300 mt-1">완료 항목 없음</div>}
+        </div>
+        <div className="bg-blue-50 rounded-lg p-3 border border-blue-100">
+          <div className="text-xs text-blue-600 font-medium mb-2">2라인 (일룸/이브닝/키즈)</div>
+          <div className="text-2xl font-medium text-blue-700">{ydQty.A.toLocaleString()}<span className="text-xs font-normal text-blue-400 ml-1">개</span></div>
+          {ydCarry.A>0&&<div className="text-xs text-blue-400 mt-0.5">이월 {ydCarry.A}개 →</div>}
+          {Object.keys(ydProduced.A).length>0&&<div className="mt-2 space-y-1">{Object.entries(ydProduced.A).map(([sc,q])=><div key={sc} className="flex justify-between text-xs"><span className="text-blue-500 truncate" style={{maxWidth:120}}>{sd[sc]?sd[sc].n:sc}</span><span className="text-blue-700 font-medium ml-2">{q}개</span></div>)}</div>}
+          {Object.keys(ydProduced.A).length===0&&<div className="text-xs text-blue-300 mt-1">완료 항목 없음</div>}
+        </div>
+      </div>
     </div>
 
     <div className="grid grid-cols-3 gap-4 mb-5">
@@ -580,7 +630,7 @@ function MC({l,v,u,s,w}){
   </div>
 }
 
-function Plan({inv,plan,mp,setMp,isA,capacity,setCapacity,sd,codes,groups,completedCards,toggleComplete}){
+function Plan({inv,plan,mp,setMp,isA,capacity,setCapacity,sd,codes,groups,completedCards,toggleComplete,carryLog,setCarryLog}){
   const[gf,setGf]=useState('전체');
   const[shortOnly,setShortOnly]=useState(false);
   const[expanded,setExpanded]=useState(false);
@@ -800,6 +850,10 @@ function Plan({inv,plan,mp,setMp,isA,capacity,setCapacity,sd,codes,groups,comple
               newMp[c]={...newMp[c],[carryPopup.toDate]:(newMp[c][carryPopup.toDate]||0)+moveQty};
               setMp(newMp);
               const updLS={...LS('mp')||{}};updLS[c]=newMp[c];LS('mp',updLS);
+              // 이월 기록 저장
+              const newLog=[...carryLog,{code:c,fromDate:carryPopup.fromDate,toDate:carryPopup.toDate,qty:moveQty,line:carryPopup.line,ts:new Date().toISOString()}];
+              setCarryLog(newLog);LS('carryLog',newLog);
+              if(window.__fb)window.__fb.set({carryLog:newLog});
               setCarryPopup(null);
             }} className="flex-1 py-2 text-xs bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium">이월 적용</button>
             <button onClick={()=>setCarryPopup(null)} className="px-4 py-2 text-xs border border-gray-200 text-gray-500 rounded-lg hover:bg-gray-50">취소</button>
@@ -1259,6 +1313,7 @@ function App(){
   const[logs,setLogs]=useState(()=>LS('logs')||[]);
   const[fbLoaded,setFbLoaded]=useState(false);
   const[completedCards,setCompletedCards]=useState(()=>LS('completedCards')||{});
+  const[carryLog,setCarryLog]=useState(()=>LS('carryLog')||[]);
   const toggleComplete=(code,date,eq)=>{const k=`${code}_${date}_${eq}`;const n={...completedCards};if(n[k])delete n[k];else n[k]=true;setCompletedCards(n);LS('completedCards',n);if(window.__fb)window.__fb.set({completedCards:n});};
 
   // Firebase 초기 동기화
@@ -1274,6 +1329,7 @@ function App(){
       setMp(LS('mp')||{});
       setCapacity(LS('capacity')||260);
       setCompletedCards(LS('completedCards')||{});
+      setCarryLog(LS('carryLog')||[]);
       setFbLoaded(true);
       // 실시간 리스너
       if(window.__fb){
@@ -1537,8 +1593,8 @@ function App(){
             <button onClick={()=>setUser(null)} className="text-xs px-3 py-1.5 text-gray-400 hover:text-gray-600 ml-2">로그아웃</button>
           </div>
         </div>
-        {tab==='dashboard'&&<Dash inv={inv} map={map} hist={hist} onUp={handleUp} isA={isA} plan={plan} mp={mp} sd={sd} codes={codes} groups={groups}/>}
-        {tab==='planning'&&<Plan inv={inv} plan={plan} mp={mp} setMp={setMp} isA={isA} capacity={capacity} setCapacity={c=>{setCapacity(c);LS('capacity',c);}} sd={sd} codes={codes} groups={groups} completedCards={completedCards} toggleComplete={toggleComplete}/>}
+        {tab==='dashboard'&&<Dash inv={inv} map={map} hist={hist} onUp={handleUp} isA={isA} plan={plan} mp={mp} sd={sd} codes={codes} groups={groups} completedCards={completedCards} carryLog={carryLog}/>}
+        {tab==='planning'&&<Plan inv={inv} plan={plan} mp={mp} setMp={setMp} isA={isA} capacity={capacity} setCapacity={c=>{setCapacity(c);LS('capacity',c);}} sd={sd} codes={codes} groups={groups} completedCards={completedCards} toggleComplete={toggleComplete} carryLog={carryLog} setCarryLog={setCarryLog}/>}
         {tab==='mapping'&&isA&&<MapMgr map={map} setMap={setMap} onUp={handleMapUp} sd={sd} hist={hist}/>}
         {tab==='inventory'&&isA&&<Inv inv={baseInv} setInv={setBaseInv} save={()=>saveBaseInv(baseInv)} capacity={capacity} setCapacity={c=>{setCapacity(c);LS('capacity',c);}} sd={sd} codes={codes} groups={groups}/>}
         {tab==='history'&&isA&&<div>
