@@ -580,7 +580,7 @@ function MC({l,v,u,s,w}){
   </div>
 }
 
-function Plan({inv,plan,mp,setMp,isA,capacity,setCapacity,sd,codes,groups}){
+function Plan({inv,plan,mp,setMp,isA,capacity,setCapacity,sd,codes,groups,completedCards,toggleComplete}){
   const[gf,setGf]=useState('전체');
   const[shortOnly,setShortOnly]=useState(false);
   const[expanded,setExpanded]=useState(false);
@@ -593,6 +593,7 @@ function Plan({inv,plan,mp,setMp,isA,capacity,setCapacity,sd,codes,groups}){
   // lineOverride: {code_date: 'A'|'B'|'AB'} — 드래그앤드롭으로 기본 배정 덮어쓰기
   const[lineOverride,setLineOverride]=useState(()=>LS('lineOverride')||{});
   const[splitPopup,setSplitPopup]=useState(null); // {code,date,qty,toLine}
+  const[carryPopup,setCarryPopup]=useState(null); // {code,fromDate,toDate,qty,line}
   const[dragItem,setDragItem]=useState(null); // {code,date,qty,fromLine}
   const getLine=(c,d)=>{const ov=lineOverride[c+'_'+d];return ov?(typeof ov==='object'?ov.line:ov):getEquip(c);};
   const setLine=(c,d,line)=>{const k=c+'_'+d;const n={...lineOverride,[k]:line};setLineOverride(n);LS('lineOverride',n);};
@@ -764,6 +765,49 @@ function Plan({inv,plan,mp,setMp,isA,capacity,setCapacity,sd,codes,groups}){
       </div>
     </div>}
 
+    {carryPopup&&(()=>{
+      const fmt2=d=>{const dt=new Date(d);const dd=['일','월','화','수','목','금','토'];return `${dt.getMonth()+1}/${dt.getDate()}(${dd[dt.getDay()]})`};
+      const maxQty=carryPopup.qty;
+      return <div className="fixed inset-0 bg-black/30 z-50 flex items-center justify-center" onClick={()=>setCarryPopup(null)}>
+        <div className="bg-white rounded-xl shadow-xl p-5 w-72" onClick={e=>e.stopPropagation()}>
+          <div className="text-sm font-medium mb-1">이월 수량 입력</div>
+          <div className="text-xs text-gray-500 mb-4">{fmt2(carryPopup.fromDate)} → {fmt2(carryPopup.toDate)}</div>
+          <div className="text-xs text-gray-500 mb-1.5">{sd[carryPopup.code]?.n}</div>
+          <div className="flex items-center gap-2 mb-1">
+            <input type="number" min="1" max={maxQty} id="carry_qty" defaultValue={maxQty}
+              className="flex-1 px-3 py-2 border border-gray-300 rounded-lg text-sm text-right font-medium focus:outline-none focus:ring-2 focus:ring-blue-300"
+              onInput={e=>{
+                let v=parseInt(e.target.value)||0;
+                if(v>maxQty){v=maxQty;e.target.value=v;}
+                if(v<1&&e.target.value!==''){v=1;e.target.value=v;}
+                const el=document.getElementById('carry_remain');
+                if(el)el.textContent=`원래 날짜 잔여: ${maxQty-v}개`;
+              }}/>
+            <span className="text-sm text-gray-500">개</span>
+          </div>
+          <div id="carry_remain" className="text-xs text-gray-400 mb-4 text-right">원래 날짜 잔여: 0개</div>
+          <div className="flex gap-2">
+            <button onClick={()=>{
+              const moveQty=Math.min(Math.max(parseInt(document.getElementById('carry_qty').value)||0,1),maxQty);
+              const remQty=maxQty-moveQty;
+              const c=carryPopup.code;
+              const newMp={...mp};
+              if(!newMp[c])newMp[c]={};
+              // 원래 날짜 수량 감소
+              if(remQty>0)newMp[c]={...newMp[c],[carryPopup.fromDate]:remQty};
+              else{const tmp={...newMp[c]};delete tmp[carryPopup.fromDate];newMp[c]=tmp;}
+              // 이월 날짜 수량 추가
+              newMp[c]={...newMp[c],[carryPopup.toDate]:(newMp[c][carryPopup.toDate]||0)+moveQty};
+              setMp(newMp);
+              const updLS={...LS('mp')||{}};updLS[c]=newMp[c];LS('mp',updLS);
+              setCarryPopup(null);
+            }} className="flex-1 py-2 text-xs bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium">이월 적용</button>
+            <button onClick={()=>setCarryPopup(null)} className="px-4 py-2 text-xs border border-gray-200 text-gray-500 rounded-lg hover:bg-gray-50">취소</button>
+          </div>
+        </div>
+      </div>;
+    })()}
+
     {hasSchedule&&<div className="border border-gray-200 rounded-lg p-4 mb-4 bg-[#FFFFFF]">
       <div className="flex items-center justify-between mb-3">
         <h3 className="text-sm font-medium">설비별 생산 흐름</h3>
@@ -852,23 +896,37 @@ function Plan({inv,plan,mp,setMp,isA,capacity,setCapacity,sd,codes,groups}){
               const curGroups=[...new Set(items.map(i=>i.group))];
               const changed=prevGroups.length>0&&curGroups.length>0&&JSON.stringify(prevGroups.sort())!==JSON.stringify(curGroups.sort());
               const day=new Date(d).getDay();
-              return <div key={d} className="flex-shrink-0 text-center" style={{minWidth:80}}>
+              return <div key={d} className="flex-shrink-0 text-center" style={{minWidth:80}}
+                onDragOver={e=>{if(dragItem&&dragItem.fromLine===eq&&dragItem.date!==d)e.preventDefault()}}
+                onDrop={e=>{
+                  e.preventDefault();
+                  if(!dragItem||dragItem.fromLine!==eq||dragItem.date===d)return;
+                  setCarryPopup({code:dragItem.code,fromDate:dragItem.date,toDate:d,qty:dragItem.lineQty,line:eq});
+                  setDragItem(null);
+                }}
+              >
                 <div className={`text-xs mb-1 ${day===0?'text-red-400':day===6?'text-blue-400':'text-gray-500'}`}>{fmt(d)}</div>
                 {items.length===0?<div className="h-16 flex items-center justify-center"><span className="text-xs text-gray-300">-</span></div>:
                 <div className="space-y-1">
                   {items.map((item,ii)=>{
                     const isSplit=getLine(item.code,d)==='AB';
+                    const ck=`${item.code}_${d}_${eq}`;
+                    const isDone=!!completedCards[ck];
                     return <div key={ii} className="relative"
-                      draggable={isA}
-                      onDragStart={()=>isA&&setDragItem({code:item.code,date:d,lineQty:item.qty,totalQty:(mp[item.code]||{})[d]||0,fromLine:eq})}
+                      draggable={isA&&!isDone}
+                      onDragStart={()=>isA&&!isDone&&setDragItem({code:item.code,date:d,lineQty:item.qty,totalQty:(mp[item.code]||{})[d]||0,fromLine:eq})}
                       onDragEnd={()=>setDragItem(null)}
-                      style={{cursor:isA?'grab':'default'}}
+                      style={{cursor:isA?'pointer':'default'}}
+                      onClick={e=>{if(isA){e.stopPropagation();toggleComplete(item.code,d,eq);}}}
                     >
                       {di>0&&changed&&ii===0&&<div className="absolute -left-1 top-1/2 w-2 h-2 rounded-full bg-red-400" title="교체 발생"></div>}
                       {isSplit&&<div className="absolute -top-1 -right-1 w-3 h-3 bg-purple-500 rounded-full text-white flex items-center justify-center" style={{fontSize:7}} title="분할 생산">2</div>}
-                      <div className="px-1.5 py-1 rounded font-medium" style={{background:GB[item.group]||'#f3f4f6',color:GC[item.group]||'#666',borderLeft:`3px solid ${GC[item.group]||'#999'}`}} title={`${item.name}: ${item.qty}개`}>
+                      <div className="px-1.5 py-1 rounded font-medium relative overflow-hidden" style={{background:isDone?'#e5e7eb':GB[item.group]||'#f3f4f6',color:isDone?'#9ca3af':GC[item.group]||'#666',borderLeft:`3px solid ${isDone?'#9ca3af':GC[item.group]||'#999'}`,opacity:isDone?0.7:1,transition:'all 0.2s'}} title={`${item.name}: ${item.qty}개`}>
                         <div className="truncate" style={{maxWidth:70,fontSize:10}}>{item.group}</div>
                         <div style={{fontSize:9,opacity:0.8}}>{item.size&&item.size!=='Z'?item.size+' ':''}{item.qty}개</div>
+                        {isDone&&<div style={{position:'absolute',inset:0,display:'flex',alignItems:'center',justifyContent:'center'}}>
+                          <span style={{fontSize:11,fontWeight:700,color:'#6b7280',border:'1.5px solid #ef4444',borderRadius:3,padding:'0 3px',transform:'rotate(-15deg)',letterSpacing:1,opacity:0.85,color:'#ef4444'}}>완료</span>
+                        </div>}
                       </div>
                     </div>;
                   })}
@@ -1200,10 +1258,12 @@ function App(){
   const[toast,setToast]=useState(null);
   const[logs,setLogs]=useState(()=>LS('logs')||[]);
   const[fbLoaded,setFbLoaded]=useState(false);
+  const[completedCards,setCompletedCards]=useState(()=>LS('completedCards')||{});
+  const toggleComplete=(code,date,eq)=>{const k=`${code}_${date}_${eq}`;const n={...completedCards};if(n[k])delete n[k];else n[k]=true;setCompletedCards(n);LS('completedCards',n);if(window.__fb)window.__fb.set({completedCards:n});};
 
   // Firebase 초기 동기화
   useEffect(()=>{
-    const KEYS=['baseInv','txns','map','hist','plan','mp','capacity'];
+    const KEYS=['baseInv','txns','map','hist','plan','mp','capacity','completedCards'];
     const doSync=async()=>{
       await syncFromFirebase();
       setBaseInv(LS('baseInv')||LS('inv')||{});
@@ -1213,11 +1273,12 @@ function App(){
       setPlan(LS('plan')||{});
       setMp(LS('mp')||{});
       setCapacity(LS('capacity')||260);
+      setCompletedCards(LS('completedCards')||{});
       setFbLoaded(true);
       // 실시간 리스너
       if(window.__fb){
         window.__fb.listen(data=>{
-          ['baseInv','txns','map','hist','plan','mp','capacity','visitors'].forEach(k=>{
+          ['baseInv','txns','map','hist','plan','mp','capacity','completedCards','visitors'].forEach(k=>{
             if(data[k]!==undefined){
               try{localStorage.setItem('si_'+k,typeof data[k]==='string'?data[k]:JSON.stringify(data[k]))}catch{}
             }
@@ -1477,7 +1538,7 @@ function App(){
           </div>
         </div>
         {tab==='dashboard'&&<Dash inv={inv} map={map} hist={hist} onUp={handleUp} isA={isA} plan={plan} mp={mp} sd={sd} codes={codes} groups={groups}/>}
-        {tab==='planning'&&<Plan inv={inv} plan={plan} mp={mp} setMp={setMp} isA={isA} capacity={capacity} setCapacity={c=>{setCapacity(c);LS('capacity',c);}} sd={sd} codes={codes} groups={groups}/>}
+        {tab==='planning'&&<Plan inv={inv} plan={plan} mp={mp} setMp={setMp} isA={isA} capacity={capacity} setCapacity={c=>{setCapacity(c);LS('capacity',c);}} sd={sd} codes={codes} groups={groups} completedCards={completedCards} toggleComplete={toggleComplete}/>}
         {tab==='mapping'&&isA&&<MapMgr map={map} setMap={setMap} onUp={handleMapUp} sd={sd} hist={hist}/>}
         {tab==='inventory'&&isA&&<Inv inv={baseInv} setInv={setBaseInv} save={()=>saveBaseInv(baseInv)} capacity={capacity} setCapacity={c=>{setCapacity(c);LS('capacity',c);}} sd={sd} codes={codes} groups={groups}/>}
         {tab==='history'&&isA&&<div>
