@@ -524,6 +524,7 @@ function Dash({inv,map,hist,onUp,isA,plan,mp,sd,codes,groups,completedCards,carr
                   grpMap[grp]=(grpMap[grp]||0)+q;
                   if(!grpDetail[grp])grpDetail[grp]=[];
                   grpDetail[grp].push({size:getSizeKey(sd[code]?.n)||code,q});
+                  grpDetail[grp].sort((a,b)=>(SIZE_ORDER[a.size]??9)-(SIZE_ORDER[b.size]??9));
                 });
                 return <div className="flex flex-col gap-1.5">{Object.entries(grpMap).map(([grp,total])=>{
                   const grpColor=GC[grp]||'#6b7280';
