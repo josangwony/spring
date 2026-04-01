@@ -638,6 +638,29 @@ function Plan({inv,plan,mp,setMp,isA,capacity,setCapacity,sd,codes,groups}){
   const eqColor=(group)=>GC[group]||'#6b7280';
 
   return(<div className={expanded?'fixed inset-0 z-50 bg-[#FAF8F6] p-6 overflow-auto':''}>
+    <div className="flex items-center gap-2 mb-2">
+      <span className="text-sm font-medium">일자별 상세</span>
+      {isA&&<button onClick={autoPlan} className="text-xs px-4 py-1.5 rounded-lg bg-blue-600 text-white font-medium hover:bg-blue-700 transition-colors shadow-sm">⚡ 자동 계획</button>}
+      <button onClick={()=>setExpanded(!expanded)} className="text-xs px-3 py-1.5 rounded-lg border border-gray-200 text-gray-500 hover:bg-gray-100">{expanded?'🗗 축소':'🗖 확대'}</button>
+      <button onClick={()=>setShortOnly(!shortOnly)} className={`text-xs px-3 py-1.5 rounded-lg border transition-colors ${shortOnly?'bg-red-50 border-red-300 text-red-600 font-medium':'border-gray-200 text-gray-500 hover:bg-gray-100'}`}>
+        {shortOnly?'⚠ 부족분만 보기 ON':'⚠ 부족분만 보기'}
+      </button>
+      {shortOnly&&<span className="text-xs text-gray-400">{fl.length}종 부족</span>}
+      <div className="ml-auto">
+        <select value={gf} onChange={e=>setGf(e.target.value)} className="text-xs px-2 py-1.5 border border-gray-200 rounded-lg bg-[#FFFFFF] focus:outline-none focus:ring-2 focus:ring-blue-200">
+          <option value="전체">전체 그룹 ({codes.length}종)</option>
+          {groups.map(g=><option key={g} value={g}>{g} ({codes.filter(c=>sd[c].g===g).length}종)</option>)}
+        </select>
+      </div>
+    </div>
+    <div className="flex items-center gap-2 mb-4">
+      <span className="text-xs text-gray-500">기간:</span>
+      <input type="date" value={startDate} onChange={e=>setStartDate(e.target.value)} className="text-xs px-2 py-1.5 border border-gray-200 rounded-lg bg-[#FFFFFF] focus:outline-none focus:ring-2 focus:ring-blue-200"/>
+      <span className="text-xs text-gray-400">~</span>
+      <input type="date" value={endDate} onChange={e=>setEndDate(e.target.value)} className="text-xs px-2 py-1.5 border border-gray-200 rounded-lg bg-[#FFFFFF] focus:outline-none focus:ring-2 focus:ring-blue-200"/>
+      <span className="text-xs text-gray-400">({dates.length}일)</span>
+      {[['1주',7],['2주',14],['3주',21],['1개월',30]].map(([l,d])=><button key={l} onClick={()=>{const t=new Date(startDate);t.setDate(t.getDate()+d-1);setEndDate(t.toISOString().slice(0,10))}} className="text-xs px-2.5 py-1.5 rounded-lg border border-gray-200 text-gray-500 hover:bg-gray-100">{l}</button>)}
+    </div>
     {capWarn&&<div className="fixed inset-0 bg-black/30 z-40 flex items-center justify-center" onClick={()=>setCapWarn(null)}>
       <div className="bg-white rounded-xl shadow-2xl p-6 max-w-md w-full mx-4" onClick={e=>e.stopPropagation()}>
         <h3 className="text-base font-bold text-red-600 mb-3">⚠ Capacity 초과 경고</h3>
@@ -835,9 +858,7 @@ function Plan({inv,plan,mp,setMp,isA,capacity,setCapacity,sd,codes,groups}){
       })()}
     </div>}
 
-    {isA&&<div className="flex items-center gap-2 mb-3 px-3 py-2 bg-blue-50 rounded-lg text-xs text-blue-700">
-      ⚡ 자동 계획: JIT 부족분 최소 생산 | 파란색 입력란: 수기 수정 | 잔량 실시간 재계산
-    </div>}
+
     <div className="border border-gray-200 rounded-lg overflow-auto" style={{maxHeight:expanded?'calc(100vh - 220px)':'70vh'}}>
       <table className="w-full text-xs" style={{minWidth:dates.length*130+200,borderSpacing:0,borderCollapse:'separate'}}>
         <thead className="sticky top-0 z-20" style={{boxShadow:'0 2px 4px rgba(0,0,0,0.08)'}}><tr>
