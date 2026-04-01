@@ -900,11 +900,11 @@ function Plan({inv,plan,mp,setMp,isA,capacity,setCapacity,sd,codes,groups,comple
               newMp[c]={...newMp[c],[carryPopup.toDate]:(newMp[c][carryPopup.toDate]||0)+moveQty};
               setMp(newMp);
               LS('mp',newMp);
-              if(window.__fb)window.__fb.set({mp:newMp});
+              if(window.__fb)window.__fb.set('mp',newMp);
               // 이월 기록 저장
               const newLog=[...carryLog,{code:c,fromDate:carryPopup.fromDate,toDate:carryPopup.toDate,qty:moveQty,line:carryPopup.line,ts:new Date().toISOString()}];
               setCarryLog(newLog);LS('carryLog',newLog);
-              if(window.__fb)window.__fb.set({carryLog:newLog});
+              if(window.__fb)window.__fb.set('carryLog',newLog);
               setCarryPopup(null);
             }} className="flex-1 py-2 text-xs bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium">이월 적용</button>
             <button onClick={()=>setCarryPopup(null)} className="px-4 py-2 text-xs border border-gray-200 text-gray-500 rounded-lg hover:bg-gray-50">취소</button>
@@ -1365,7 +1365,7 @@ function App(){
   const[fbLoaded,setFbLoaded]=useState(false);
   const[completedCards,setCompletedCards]=useState(()=>LS('completedCards')||{});
   const[carryLog,setCarryLog]=useState(()=>LS('carryLog')||[]);
-  const toggleComplete=(code,date,eq,qty)=>{const k=`${code}_${date}_${eq}`;const n={...completedCards};if(n[k])delete n[k];else n[k]={qty:qty||0};setCompletedCards(n);LS('completedCards',n);if(window.__fb)window.__fb.set({completedCards:n});};
+  const toggleComplete=(code,date,eq,qty)=>{const k=`${code}_${date}_${eq}`;const n={...completedCards};if(n[k])delete n[k];else n[k]={qty:qty||0};setCompletedCards(n);LS('completedCards',n);if(window.__fb)window.__fb.set('completedCards',n);};
 
   // Firebase 초기 동기화
   useEffect(()=>{
