@@ -166,7 +166,7 @@ function LS(k,v){
 // Firebase → localStorage 동기화 (앱 로드 시 1회 + 실시간)
 async function syncFromFirebase(){
   if(!window.__fb)return;
-  const SYNC_KEYS=['baseInv','txns','map','hist','plan','mp','capacity','visitors'];
+  const SYNC_KEYS=['baseInv','txns','map','hist','plan','mp','capacity','completedCards','carryLog','visitors'];
   try{
     const data=await window.__fb.get();
     SYNC_KEYS.forEach(k=>{
