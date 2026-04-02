@@ -910,7 +910,10 @@ function Plan({inv,plan,mp,setMp,isA,capacity,setCapacity,sd,codes,groups,comple
               LS('mp',newMp);
               if(window.__fb)window.__fb.set('mp',newMp);
               // 이월 기록 저장
-              const newLog=[...carryLog,{code:c,fromDate:carryPopup.fromDate,toDate:carryPopup.toDate,qty:moveQty,line:carryPopup.line,ts:new Date().toISOString()}];
+              // 역방향 이월이면 기존 기록 제거, 아니면 추가
+              const filtered=carryLog.filter(l=>!(l.code===c&&l.toDate===carryPopup.fromDate&&l.fromDate===carryPopup.toDate&&l.line===carryPopup.line));
+              const isReverse=filtered.length<carryLog.length;
+              const newLog=isReverse?filtered:[...filtered,{code:c,fromDate:carryPopup.fromDate,toDate:carryPopup.toDate,qty:moveQty,line:carryPopup.line,ts:new Date().toISOString()}];
               setCarryLog(newLog);LS('carryLog',newLog);
               if(window.__fb)window.__fb.set('carryLog',newLog);
               setCarryPopup(null);
