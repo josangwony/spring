@@ -1365,7 +1365,7 @@ function App(){
   const[fbLoaded,setFbLoaded]=useState(false);
   const[completedCards,setCompletedCards]=useState(()=>LS('completedCards')||{});
   const[carryLog,setCarryLog]=useState(()=>LS('carryLog')||[]);
-  const toggleComplete=(code,date,eq,qty)=>{const k=`${code}_${date}_${eq}`;const n={...completedCards};if(n[k])delete n[k];else n[k]={qty:qty||0};setCompletedCards(n);LS('completedCards',n);if(window.__fb)window.__fb.set('completedCards',n);};
+  const toggleComplete=(code,date,eq,qty)=>{const k=`${code}_${date}_${eq}`;const n={...completedCards};if(n[k])delete n[k];else n[k]={qty:qty||0};setCompletedCards(n);LS('completedCards',n);};
 
   // Firebase 초기 동기화
   useEffect(()=>{
@@ -1385,7 +1385,7 @@ function App(){
       // 실시간 리스너
       if(window.__fb){
         window.__fb.listen(data=>{
-          ['baseInv','txns','map','hist','plan','mp','capacity','completedCards','visitors'].forEach(k=>{
+          ['baseInv','txns','map','hist','plan','mp','capacity','completedCards','carryLog','visitors'].forEach(k=>{
             if(data[k]!==undefined){
               try{localStorage.setItem('si_'+k,typeof data[k]==='string'?data[k]:JSON.stringify(data[k]))}catch{}
             }
