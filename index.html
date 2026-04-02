@@ -185,6 +185,16 @@ async function syncFromFirebase(){
   }catch(e){console.warn('FB sync error',e)}
 }
 
+function getMpQty(mp,code,date){const v=(mp[code]||{})[date];return typeof v==='object'?v.qty||0:v||0;}
+function getMpCarried(mp,code,date){const v=(mp[code]||{})[date];return typeof v==='object'&&!!v.carried;}
+function setMpVal(newMp,code,date,qty,carried){
+  if(!newMp[code])newMp[code]={};
+  if(qty<=0){delete newMp[code][date];}
+  else if(carried){newMp[code][date]={qty,carried:true};}
+  else{newMp[code][date]=qty;}
+}
+function getMpCodeTotal(mp,code){return Object.values(mp[code]||{}).reduce((a,v)=>a+(typeof v==='object'?v.qty||0:v||0),0);}
+
 function detectFile(h,raw){
   const s=h.map(x=>String(x||''));
   if(s.includes('생산일')&&s.includes('제품코드')&&s.includes('미포장량'))return 'pkg';
@@ -464,7 +474,7 @@ function Dash({inv,map,hist,onUp,isA,plan,mp,sd,codes,groups,completedCards,carr
   const[sort,setSort]=useState({col:null,asc:true});
   const[shortOnly,setShortOnly]=useState(false);
   const tot=Object.values(inv).reduce((a,b)=>a+b,0);
-  const warn=codes.filter(c=>{const q=inv[c]||0,o=(plan[c]||[]).reduce((a,b)=>a+b.qty,0),i=Object.values(mp[c]||{}).reduce((a,b)=>a+b,0);return q+i-o<=0}).length;
+  const warn=codes.filter(c=>{const q=inv[c]||0,o=(plan[c]||[]).reduce((a,b)=>a+b.qty,0),i=getMpCodeTotal(mp,c);return q+i-o<=0}).length;
   // 어제 날짜 기준 생산완료 집계
   const yesterday=new Date();yesterday.setDate(yesterday.getDate()-1);
   const yd=`${yesterday.getFullYear()}-${String(yesterday.getMonth()+1).padStart(2,'0')}-${String(yesterday.getDate()).padStart(2,'0')}`;
@@ -492,7 +502,7 @@ function Dash({inv,map,hist,onUp,isA,plan,mp,sd,codes,groups,completedCards,carr
     else if(l.line==='B')ydCarry.B+=l.qty;
   });
   const flBase=flt==='전체'?codes:codes.filter(c=>sd[c].g===flt);
-  const getVals=c=>{const q=inv[c]||0,o=(plan[c]||[]).reduce((a,b)=>a+b.qty,0),i=Object.values(mp[c]||{}).reduce((a,b)=>a+b,0);return{q,o,i,av:q+i-o}};
+  const getVals=c=>{const q=inv[c]||0,o=(plan[c]||[]).reduce((a,b)=>a+b.qty,0),i=getMpCodeTotal(mp,c);return{q,o,i,av:q+i-o}};
   const flFiltered=shortOnly?flBase.filter(c=>getVals(c).av<=0):flBase;
   const fl=sort.col?[...flFiltered].sort((a,b)=>{const va=getVals(a),vb=getVals(b);const diff=sort.col==='q'?va.q-vb.q:va.av-vb.av;return sort.asc?diff:-diff}):flFiltered;
   const toggleSort=col=>setSort(s=>{if(s.col===col){if(s.asc)return{col,asc:false};return{col:null,asc:true}}return{col,asc:true}});
@@ -613,7 +623,7 @@ function Dash({inv,map,hist,onUp,isA,plan,mp,sd,codes,groups,completedCards,carr
             const today=new Date();
             for(let di=0;di<14;di++){const d=new Date(today);d.setDate(d.getDate()+di);const ds=d.toISOString().slice(0,10);
               const out=(plan[c]||[]).filter(p=>p.date===ds).reduce((a,b)=>a+b.qty,0);
-              const inp=(mp[c]||{})[ds]||0;run=run+inp-out;
+              const inp=getMpQty(mp,c,ds);run=run+inp-out;
               if(run<0&&!shortDate){const m=d.getMonth()+1;shortDate=`${m}/${d.getDate()}`}}
             return{c,...v,shortDate}
           }).filter(x=>x.shortDate).sort((a,b)=>a.av-b.av).slice(0,6);
@@ -665,7 +675,7 @@ function Dash({inv,map,hist,onUp,isA,plan,mp,sd,codes,groups,completedCards,carr
             <td className="px-3 py-2"><div className="h-1.5 rounded-full" style={{width:`${Math.min(Math.max((av/200)*100,5),100)}%`,background:av<0?'#ef4444':av<=50?'#f59e0b':'#10b981'}}/></td>
           </tr>
         })}
-        {(()=>{const tq=fl.reduce((a,c)=>a+(inv[c]||0),0),to=fl.reduce((a,c)=>a+(plan[c]||[]).reduce((s,b)=>s+b.qty,0),0),ti=fl.reduce((a,c)=>a+Object.values(mp[c]||{}).reduce((s,b)=>s+b,0),0),ta=tq+ti-to;return <tr className="bg-gray-100 border-t-2 border-gray-300 sticky bottom-0">
+        {(()=>{const tq=fl.reduce((a,c)=>a+(inv[c]||0),0),to=fl.reduce((a,c)=>a+(plan[c]||[]).reduce((s,b)=>s+b.qty,0),0),ti=fl.reduce((a,c)=>a+getMpCodeTotal(mp,c),0),ta=tq+ti-to;return <tr className="bg-gray-100 border-t-2 border-gray-300 sticky bottom-0">
           <td className="px-3 py-2 font-bold text-gray-700" colSpan={2}>합계 ({fl.length}종)</td>
           <td className="text-right px-3 py-2 font-bold">{tq.toLocaleString()}</td>
           <td className="text-right px-3 py-2 font-bold text-gray-500">{to.toLocaleString()}</td>
@@ -717,7 +727,7 @@ function Plan({inv,plan,mp,setMp,isA,capacity,setCapacity,sd,codes,groups,comple
   const flBase=gf==='전체'?codes:codes.filter(c=>sd[c].g===gf);
   const fl=shortOnly?flBase.filter(c=>{
     let run=inv[c]||0;
-    for(const d of dates){const out=(plan[c]||[]).filter(p=>p.date===d).reduce((a,b)=>a+b.qty,0);const inp=(mp[c]||{})[d]||0;run=run+inp-out;if(run<=0)return true}
+    for(const d of dates){const out=(plan[c]||[]).filter(p=>p.date===d).reduce((a,b)=>a+b.qty,0);const inp=getMpQty(mp,c,d);run=run+inp-out;if(run<=0)return true}
     return false;
   }):flBase;
   const fmt=d=>{const dt=new Date(d);const dd=['일','월','화','수','목','금','토'];return `${dt.getMonth()+1}/${dt.getDate()}(${dd[dt.getDay()]})`};
@@ -728,7 +738,7 @@ function Plan({inv,plan,mp,setMp,isA,capacity,setCapacity,sd,codes,groups,comple
     dates.forEach(d=>{
       const dayA=[],dayB=[];
       codes.forEach(c=>{
-        const qty=(mp[c]||{})[d]||0;
+        const qty=getMpQty(mp,c,d);
         if(qty>0){
           const line=getLine(c,d);
           const sizeKey=getSizeKey(sd[c].n);
@@ -899,13 +909,13 @@ function Plan({inv,plan,mp,setMp,isA,capacity,setCapacity,sd,codes,groups,comple
               const moveQty=Math.min(Math.max(parseInt(document.getElementById('carry_qty').value)||0,1),maxQty);
               const remQty=maxQty-moveQty;
               const c=carryPopup.code;
-              const newMp={...mp};
-              if(!newMp[c])newMp[c]={};
-              // 원래 날짜 수량 감소
-              if(remQty>0)newMp[c]={...newMp[c],[carryPopup.fromDate]:remQty};
-              else{const tmp={...newMp[c]};delete tmp[carryPopup.fromDate];newMp[c]=tmp;}
-              // 이월 날짜 수량 추가
-              newMp[c]={...newMp[c],[carryPopup.toDate]:(newMp[c][carryPopup.toDate]||0)+moveQty};
+              const newMp={...mp,[c]:{...mp[c]}};
+              // 원래 날짜 수량 감소 (이월 플래그 없음)
+              setMpVal(newMp,c,carryPopup.fromDate,remQty,false);
+              // 이월 날짜 수량 추가 - fromDate가 carried였으면 역방향(복원), 아니면 이월
+              const existQty=getMpQty(newMp,c,carryPopup.toDate);
+              const isCarryBack=getMpCarried(mp,c,carryPopup.fromDate);
+              setMpVal(newMp,c,carryPopup.toDate,existQty+moveQty,!isCarryBack);
               setMp(newMp);
               LS('mp',newMp);
               if(window.__fb)window.__fb.set('mp',newMp);
@@ -1028,10 +1038,10 @@ function Plan({inv,plan,mp,setMp,isA,capacity,setCapacity,sd,codes,groups,comple
                     const isSplit=getLine(item.code,d)==='AB';
                     const ck=`${item.code}_${d}_${eq}`;
                     const isDone=completedCards[ck]!=null;
-                    const isCarried=(carryLog||[]).some(l=>l.code===item.code&&l.toDate===d&&l.line===eq);
+                    const isCarried=getMpCarried(mp,item.code,d);
                     return <div key={ii} className="relative"
                       draggable={isA&&!isDone}
-                      onDragStart={()=>isA&&!isDone&&setDragItem({code:item.code,date:d,lineQty:item.qty,totalQty:(mp[item.code]||{})[d]||0,fromLine:eq})}
+                      onDragStart={()=>isA&&!isDone&&setDragItem({code:item.code,date:d,lineQty:item.qty,totalQty:getMpQty(mp,item.code,d),fromLine:eq})}
                       onDragEnd={()=>setDragItem(null)}
                       style={{cursor:isA?'pointer':'default'}}
                       onClick={e=>{if(isA){e.stopPropagation();toggleComplete(item.code,d,eq,item.qty);}}}
@@ -1141,12 +1151,12 @@ function Plan({inv,plan,mp,setMp,isA,capacity,setCapacity,sd,codes,groups,comple
             <td className="text-right px-2 py-1.5 font-medium sticky left-[200px] bg-[#FFFFFF] z-10 border-r border-gray-100">{run}</td>
             {dates.map(d=>{
               const out=(plan[c]||[]).filter(p=>p.date===d).reduce((a,b)=>a+b.qty,0);
-              const inp=(mp[c]||{})[d]||0;
+              const inp=getMpQty(mp,c,d);
               run=run+inp-out;
               return <Fragment key={d}>
                 <td className="text-center px-1 py-1 border-l border-gray-200">
                   {isA?<input type="number" min="0" value={inp||''} placeholder="0"
-                    onChange={e=>{const v=parseInt(e.target.value)||0;setMp(p=>{const n={...p};if(!n[c])n[c]={};n[c]={...n[c],[d]:v};return n})}}
+                    onChange={e=>{const v=parseInt(e.target.value)||0;setMp(p=>{const n={...p,[c]:{...p[c]}};setMpVal(n,c,d,v,false);LS('mp',n);return n})}}
                     className={`w-10 text-center px-0.5 py-0.5 border rounded font-medium focus:outline-none focus:ring-1 text-xs ${inp?'border-blue-400 bg-blue-100 text-blue-800 ring-blue-300':'border-blue-200 bg-blue-50 text-blue-700 focus:ring-blue-300'}`}/>
                   :<span className={inp?'text-blue-600':'text-gray-300'}>{inp||0}</span>}
                 </td>
@@ -1163,11 +1173,11 @@ function Plan({inv,plan,mp,setMp,isA,capacity,setCapacity,sd,codes,groups,comple
             <td className="px-3 py-1.5 font-bold text-gray-600 sticky left-0 bg-gray-100 z-10">합계 ({fl.length}종)</td>
             <td className="text-right px-2 py-1.5 font-bold sticky left-[200px] bg-gray-100 z-10">{totInv.toLocaleString()}</td>
             {dates.map(d=>{
-              const dInp=fl.reduce((a,c)=>a+((mp[c]||{})[d]||0),0);
+              const dInp=fl.reduce((a,c)=>a+(getMpQty(mp,c,d)),0);
               const dOut=fl.reduce((a,c)=>a+(plan[c]||[]).filter(p=>p.date===d).reduce((s,b)=>s+b.qty,0),0);
               let running=totInv;
               dates.slice(0,dates.indexOf(d)+1).forEach(dd=>{
-                running+=fl.reduce((a,c)=>a+((mp[c]||{})[dd]||0),0);
+                running+=fl.reduce((a,c)=>a+(getMpQty(mp,c,dd)),0);
                 running-=fl.reduce((a,c)=>a+(plan[c]||[]).filter(p=>p.date===dd).reduce((s,b)=>s+b.qty,0),0);
               });
               return <Fragment key={d}>
@@ -1181,7 +1191,7 @@ function Plan({inv,plan,mp,setMp,isA,capacity,setCapacity,sd,codes,groups,comple
             <td className="px-3 py-1.5 font-bold text-gray-400 sticky left-0 bg-gray-50 z-10 text-xs">일 생산합계</td>
             <td className="sticky left-[200px] bg-gray-50 z-10"></td>
             {dates.map(d=>{
-              const dayProd=codes.reduce((a,c)=>a+((mp[c]||{})[d]||0),0);
+              const dayProd=codes.reduce((a,c)=>a+(getMpQty(mp,c,d)),0);
               return <Fragment key={d}>
                 <td className={`text-center px-1 py-1 font-bold border-l border-gray-200 ${dayProd>capacity?'text-red-600 bg-red-100':'text-gray-400'}`} colSpan={3}>
                   {dayProd>0?dayProd:''}{dayProd>capacity?' ⚠':''}
