@@ -366,7 +366,7 @@ function downloadMappingTemplate(){
 
 function Login({onLogin}){
   const[role,setRole]=useState('iloom');const[pw,setPw]=useState('');const[err,setErr]=useState('');
-  const go=()=>{if(role==='iloom'){if(pw==='1234')onLogin({role:'admin',name:'일룸'});else setErr('비밀번호가 올바르지 않습니다.')}else onLogin({role:'viewer',name:'태산'})};
+  const go=()=>{if(role==='iloom'){if(pw==='1233')onLogin({role:'admin',name:'일룸'});else setErr('비밀번호가 올바르지 않습니다.')}else onLogin({role:'viewer',name:'태산'})};
 
   const[vis,setVis]=useState({today:0,total:0});
   useEffect(()=>{
