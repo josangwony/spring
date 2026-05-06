@@ -109,57 +109,22 @@ tailwind.config = {
 </head>
 <body>
 <div id="root"></div>
+<script src="aps-algo.js"></script>
 <script type="text/babel">
 const {useState,useEffect,useMemo,Fragment} = React;
 
 const GC={"헤이븐 180":"#2563eb","헤이븐 140":"#3b82f6","헤이븐 빌트인":"#0ea5e9","쿠시노":"#7c3aed","일룸 1조닝":"#059669","일룸 키즈":"#ea580c","슬로우 1조닝":"#d97706","슬로우 7조닝":"#f59e0b","이브닝":"#dc2626","모션 스프링":"#db2777","스탠다드":"#6b7280"};
 const GB={"헤이븐 180":"#dbeafe","헤이븐 140":"#dbeafe","헤이븐 빌트인":"#e0f2fe","쿠시노":"#ede9fe","일룸 1조닝":"#d1fae5","일룸 키즈":"#ffedd5","슬로우 1조닝":"#fef3c7","슬로우 7조닝":"#fef3c7","이브닝":"#fee2e2","모션 스프링":"#fce7f3","스탠다드":"#f3f4f6"};
-const SIZE_ORDER={'S':0,'SS':1,'D':2,'Q':3,'K':4,'KK':5};
-function getSizeKey(name){
-  const m=name.match(/\b(KK|SS|S|D|Q|K)\b|\((KK|SS|S|D|Q|K)\)/);
-  if(m)return m[1]||m[2];
-  if(name.includes('KK'))return 'KK';if(name.includes('SS'))return 'SS';
-  if(name.includes('(K)'))return 'K';if(name.includes('(Q)'))return 'Q';if(name.includes('(S)'))return 'S';
-  if(name.endsWith(' K'))return 'K';if(name.endsWith(' Q'))return 'Q';if(name.endsWith(' S'))return 'S';
-  return 'Z';
-}
-// 매핑 데이터(map)에서 SD/codes/GROUPS를 파생 계산 (App의 useMemo에서 사용)
-function inferGroup(n){
-  if(!n)return '기타';
-  if(n.includes('모션'))return '모션 스프링';
-  if(n.includes('빌트인'))return '헤이븐 빌트인';
-  if(n.includes('H140')||(n.includes('헤이븐')&&n.includes('140')))return '헤이븐 140';
-  if(n.includes('헤이븐')||(n.includes('AL-CU')&&!n.includes('140')))return '헤이븐 180';
-  if(n.includes('쿠시노'))return '쿠시노';
-  if(n.includes('키즈'))return '일룸 키즈';
-  if(n.includes('7조닝'))return '슬로우 7조닝';
-  if(n.includes('슬로우')||n.includes('1조닝 스프링'))return '슬로우 1조닝';
-  if(n.includes('이브닝'))return '이브닝';
-  if(n.includes('일룸')||n.includes('1조닝'))return '일룸 1조닝';
-  if(n.includes('스탠다드')||n.includes('플렉서블'))return '스탠다드';
-  return '기타';
-}
-function buildSD(map){
-  const sd={};
-  Object.values(map).forEach(v=>{
-    const sc=v.sc;
-    if(!sc)return;
-    const sn=v.sn||'';
-    const g=v.sg||(sn?inferGroup(sn):'기타');
-    if(!sd[sc])sd[sc]={n:sn||sc,g};
-  });
-  return sd;
-}
-function buildCodes(sd){
-  const groups=[...new Set(Object.values(sd).map(s=>s.g))].sort((a,b)=>a.localeCompare(b,'ko'));
-  const codes=Object.keys(sd).sort((a,b)=>{
-    const ga=sd[a].g,gb=sd[b].g;
-    if(ga!==gb)return groups.indexOf(ga)-groups.indexOf(gb);
-    const sa=SIZE_ORDER[getSizeKey(sd[a].n)]??9,sb=SIZE_ORDER[getSizeKey(sd[b].n)]??9;
-    return sa-sb;
-  });
-  return {sd,codes,groups};
-}
+// === 알고리즘 함수와 상수는 aps-algo.js로 분리됨 (글로벌 스코프 노출) ===
+// 분리된 항목: GROUP_SPEC_DEFAULT, GROUP_LIST, SPEC_OPTIONS, SPEC_LABEL,
+//            COILER_DIFF_PAIRS, coilerChangeTime, changeoverTime, getMissingSpecGroups,
+//            SIZE_ORDER, getSizeKey, inferGroup, buildSD, buildCodes,
+//            LINE_MIN_PER_DAY, getLineForGroup, dateToYMD, buildDateRange,
+//            normalizeCapacity, totalCapacity,
+//            extractShortages, placeShortages, consolidateByCode, splitByPriority,
+//            orderByGroupCluster, runDueDateFirst, runChangeoverMin, runBalanced,
+//            recomputeShortagesLeft, countCapacityExceedDays, computeScenarioMetrics,
+//            scheduleToMp, scheduleToLineOverride
 
 // LS: localStorage 캐시 + Firebase 비동기 동기화
 function LS(k,v){
@@ -174,7 +139,7 @@ function LS(k,v){
 // Firebase → localStorage 동기화 (앱 로드 시 1회 + 실시간)
 async function syncFromFirebase(){
   if(!window.__fb)return;
-  const SYNC_KEYS=['baseInv','txns','map','hist','plan','mp','capacity','completedCards','carryLog','visitors'];
+  const SYNC_KEYS=['baseInv','txns','map','hist','plan','mp','capacity','completedCards','carryLog','visitors','safetyDays','productOutbound','groupSpec','coilerMin','mpHistory','holidays'];
   try{
     const data=await window.__fb.get();
     SYNC_KEYS.forEach(k=>{
@@ -202,6 +167,8 @@ function detectFile(h,raw){
   if(s.includes('생산일')&&s.includes('제품코드')&&s.includes('생산량'))return 'pkg';
   if(s.includes('제품코드')&&s.includes('제품명')&&s.includes('합계'))return 'weekplan';
   if(s.includes('품목코드')&&s.includes('포장계획일')&&s.includes('계획량'))return 'pkgplan';
+  // ERP 자재소요현황: 헤더에 품목코드+색상+3개월(평균매출) 키워드. '3개월'은 '3개월\n평균매출' 형태라 includes로 판단
+  if(s.some(x=>x.includes('품목코드'))&&s.some(x=>x.includes('색상'))&&s.some(x=>x.includes('3개월')))return 'erp';
   return null;
 }
 
@@ -698,13 +665,99 @@ function MC({l,v,u,s,w}){
   </div>
 }
 
-function Plan({inv,plan,mp,setMp,isA,capacity,setCapacity,sd,codes,groups,completedCards,toggleComplete,carryLog,setCarryLog}){
+function Plan({inv,plan,mp,setMp,isA,capacity,setCapacity,sd,codes,groups,completedCards,toggleComplete,carryLog,setCarryLog,groupSpec,setGroupSpec,safetyDays,setSafetyDays,productOutbound,springMonthlyAvg,coilerMin,setCoilerMin,goToTab,mpHistory,pushMpSnapshot,holidays,setHolidays}){
   const[gf,setGf]=useState('전체');
   const[shortOnly,setShortOnly]=useState(false);
   const[expanded,setExpanded]=useState(false);
   const[startDate,setStartDate]=useState(()=>{const t=new Date();return t.toISOString().slice(0,10)});
   const[endDate,setEndDate]=useState(()=>{const t=new Date();t.setDate(t.getDate()+13);return t.toISOString().slice(0,10)});
   const[capWarn,setCapWarn]=useState(null);
+  const[apsGate,setApsGate]=useState(null); // {missing}
+  const[apsModal,setApsModal]=useState(null); // {open:true,scenarios,...}
+  const[apsEditor,setApsEditor]=useState(null); // {dates,shortages,scenarioName,originalMetrics,stagedSchedule}
+  const[mpHistoryOpen,setMpHistoryOpen]=useState(false);
+  const[holidaysOpen,setHolidaysOpen]=useState(false);
+  const[newHolidayDate,setNewHolidayDate]=useState(()=>new Date().toISOString().slice(0,10));
+  const[newHolidayMemo,setNewHolidayMemo]=useState('');
+  // 모달 열 때 오늘 날짜로 초기화 (이전 입력 잔여값 또는 빈 값으로 인한 기본 연도 이슈 방지)
+  useEffect(()=>{if(holidaysOpen)setNewHolidayDate(new Date().toISOString().slice(0,10))},[holidaysOpen]);
+  const addHoliday=()=>{
+    if(!newHolidayDate)return;
+    if((holidays||[]).some(h=>h.date===newHolidayDate)){alert('이미 등록된 날짜입니다.');return}
+    const next=[...(holidays||[]),{date:newHolidayDate,memo:newHolidayMemo||''}].sort((a,b)=>a.date.localeCompare(b.date));
+    if(setHolidays)setHolidays(next);
+    setNewHolidayDate(new Date().toISOString().slice(0,10));setNewHolidayMemo('');
+  };
+  const removeHoliday=(date)=>{
+    const next=(holidays||[]).filter(h=>h.date!==date);
+    if(setHolidays)setHolidays(next);
+  };
+  const restoreSnapshot=(snap)=>{
+    if(!snap)return;
+    const ts=new Date(snap.ts).toLocaleString('ko-KR',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'});
+    if(!confirm(`${ts} 시점으로 복원하시겠습니까?\n\n· 라벨: ${snap.label}\n\n현재 mp/lineOverride 상태는 자동으로 스냅샷에 저장되어 다시 되돌릴 수 있습니다.`))return;
+    if(pushMpSnapshot)pushMpSnapshot(`복원 직전 상태 (→ ${ts})`,'restore');
+    setMp(snap.mp||{});LS('mp',snap.mp||{});
+    setLineOverride(snap.lineOverride||{});LS('lineOverride',snap.lineOverride||{});
+    setMpHistoryOpen(false);
+    alert('복원 완료');
+  };
+  const createManualSnapshot=()=>{
+    const label=prompt('이 시점에 대한 라벨을 입력하세요:','수동 저장 - '+new Date().toLocaleString('ko-KR',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'}));
+    if(!label)return;
+    if(pushMpSnapshot)pushMpSnapshot(label,'manual');
+    alert('스냅샷 저장됨');
+  };
+  const editorMetrics=useMemo(()=>{
+    if(!apsEditor)return null;
+    const left=recomputeShortagesLeft(apsEditor.stagedSchedule,apsEditor.shortages,apsEditor.dates);
+    const m=computeScenarioMetrics({schedule:apsEditor.stagedSchedule,shortagesLeft:left},apsEditor.shortages);
+    const exceed=countCapacityExceedDays(apsEditor.stagedSchedule,apsEditor.dates,capacity);
+    return{...m,exceed};
+  },[apsEditor,capacity]);
+  const updateStagedItem=(line,date,idx,patch)=>{
+    if(!apsEditor)return;
+    const next=JSON.parse(JSON.stringify(apsEditor.stagedSchedule));
+    if(patch===null){
+      next[line][date].items.splice(idx,1);
+    }else if(patch.line&&patch.line!==line){
+      const it=next[line][date].items.splice(idx,1)[0];
+      next[patch.line][date].items.push(it);
+    }else if(typeof patch.qty==='number'){
+      if(patch.qty<=0)next[line][date].items.splice(idx,1);
+      else next[line][date].items[idx].qty=patch.qty;
+    }
+    setApsEditor({...apsEditor,stagedSchedule:next});
+  };
+  const commitEditor=()=>{
+    if(!apsEditor)return;
+    // 적용 직전 스냅샷
+    if(pushMpSnapshot)pushMpSnapshot(`자동 계획 - ${apsEditor.scenarioName} 적용 직전`,'aps');
+    const dts=apsEditor.dates;
+    const newMp=scheduleToMp(apsEditor.stagedSchedule,dts);
+    const merged={};
+    Object.entries(mp).forEach(([c,dmap])=>{
+      const kept={};
+      Object.entries(dmap||{}).forEach(([d,v])=>{if(!dts.includes(d))kept[d]=v});
+      if(Object.keys(kept).length>0)merged[c]=kept;
+    });
+    Object.entries(newMp).forEach(([c,dmap])=>{
+      if(!merged[c])merged[c]={};
+      Object.entries(dmap).forEach(([d,q])=>{merged[c][d]=q});
+    });
+    setMp(merged);LS('mp',merged);
+    const newOv=scheduleToLineOverride(apsEditor.stagedSchedule,dts);
+    const mergedOv={};
+    Object.entries(lineOverride).forEach(([k,v])=>{
+      const d=k.length>=10?k.slice(-10):'';
+      if(!dts.includes(d))mergedOv[k]=v;
+    });
+    Object.entries(newOv).forEach(([k,v])=>{mergedOv[k]=v});
+    setLineOverride(mergedOv);LS('lineOverride',mergedOv);
+    const m=editorMetrics||apsEditor.originalMetrics;
+    setApsEditor(null);
+    alert(`'${apsEditor.scenarioName}' 적용 완료\n· 교체 ${m.changeoverCount}회 (${m.changeoverMin}분)\n· 총 생산 ${m.totalProduced}개\n· 납기준수 ${(m.onTimeRate*100).toFixed(0)}%${m.totalShort>0?` (남은 부족 ${m.totalShort}개)`:''}`);
+  };
 
   const EQUIP_A=['일룸 1조닝','이브닝','일룸 키즈'];
   const getEquip=c=>EQUIP_A.includes(sd[c].g)?'A':'B';
@@ -723,6 +776,9 @@ function Plan({inv,plan,mp,setMp,isA,capacity,setCapacity,sd,codes,groups,comple
     while(cur<=end){result.push(cur.toISOString().slice(0,10));cur.setDate(cur.getDate()+1)}
     return result;
   },[startDate,endDate]);
+
+  const holidaySet=useMemo(()=>new Set((holidays||[]).map(h=>h.date)),[holidays]);
+  const getHolidayMemo=(d)=>{const h=(holidays||[]).find(x=>x.date===d);return h?h.memo:''};
 
   const flBase=gf==='전체'?codes:codes.filter(c=>sd[c].g===gf);
   const fl=shortOnly?flBase.filter(c=>{
@@ -759,86 +815,129 @@ function Plan({inv,plan,mp,setMp,isA,capacity,setCapacity,sd,codes,groups,comple
       });
       schedA[d]=dayA;schedB[d]=dayB;
     });
-    // Count changeovers
-    let coA=0,coB=0;
+    // Count changeovers (changeoverTime 기반 — 강선/높이/부직포 + 코일러 안정화 합산)
+    let coA=0,coB=0,coAm=0,coBm=0;
     let prevGA=null,prevGB=null;
     dates.forEach(d=>{
       schedA[d].forEach(item=>{
         if(prevGA&&prevGA!==item.group){
-          if(!(prevGA==='일룸 1조닝'&&item.group==='이브닝')&&!(prevGA==='이브닝'&&item.group==='일룸 1조닝'))coA++;
+          const t=changeoverTime(prevGA,item.group,groupSpec,coilerMin);
+          if(t>0){coA++;coAm+=t}
         }
         prevGA=item.group;
       });
       schedB[d].forEach(item=>{
-        if(prevGB&&prevGB!==item.group)coB++;
+        if(prevGB&&prevGB!==item.group){
+          const t=changeoverTime(prevGB,item.group,groupSpec,coilerMin);
+          if(t>0){coB++;coBm+=t}
+        }
         prevGB=item.group;
       });
     });
-    return{A:schedA,B:schedB,coA,coB};
-  },[mp,dates,lineOverride]);
+    return{A:schedA,B:schedB,coA,coB,coAm,coBm};
+  },[mp,dates,lineOverride,groupSpec,coilerMin]);
 
   const hasSchedule=dates.some(d=>(equipSchedule.A[d]||[]).length>0||(equipSchedule.B[d]||[]).length>0);
 
   const autoPlan=()=>{
-    if(!confirm('자동 계획을 생성하시겠습니까?\n\nJIT 방식으로 부족분을 최소 수량만 생산하며,\n같은 그룹을 묶어 교체를 최소화합니다.\n\n기존 수기 입력은 초기화됩니다.'))return;
-    const newMp={};
-    const shortages=[];
-    codes.forEach(c=>{
-      let run=inv[c]||0;
-      for(const d of dates){
-        const out=(plan[c]||[]).filter(p=>p.date===d).reduce((a,b)=>a+b.qty,0);
-        run=run-out;
-        if(run<0){shortages.push({code:c,group:sd[c].g,date:d,need:-run});run=0}
+    // 1. 부족 검사 데이터 — 월평균(productOutbound) 또는 plan 중 하나는 있어야 함
+    const hasOutbound=Object.keys(productOutbound||{}).length>0;
+    const hasPlan=Object.keys(plan||{}).length>0;
+    if(!hasOutbound&&!hasPlan){
+      if(confirm('자동 계획에 다음 중 하나는 필요합니다:\n· ERP 자재소요현황 (월평균 출고량)\n· 주간 생산계획 / 포장 계획 (출고예정)\n\n업로드 이력 탭으로 이동하시겠습니까?')){
+        if(goToTab)goToTab('history');
       }
-    });
-    if(shortages.length===0){alert('2주 내 부족 품목이 없습니다.');return}
-    const finalPlan={};
-    shortages.forEach(s=>{
-      const di=dates.indexOf(s.date);
-      const prodDate=di>0?dates[di-1]:s.date;
-      if(!finalPlan[s.code])finalPlan[s.code]={};
-      finalPlan[s.code][prodDate]=(finalPlan[s.code][prodDate]||0)+s.need;
-    });
-    for(let pass=0;pass<3;pass++){
-      codes.forEach(c=>{
-        let run=inv[c]||0;
-        for(const d of dates){
-          const out=(plan[c]||[]).filter(p=>p.date===d).reduce((a,b)=>a+b.qty,0);
-          const inp=(finalPlan[c]||{})[d]||0;
-          run=run+inp-out;
-          if(run<0){
-            const di=dates.indexOf(d);
-            const prodDate=di>0?dates[di-1]:d;
-            if(!finalPlan[c])finalPlan[c]={};
-            finalPlan[c][prodDate]=(finalPlan[c][prodDate]||0)+(-run);run=0;
-          }
-        }
-      });
+      return;
     }
-    const overDays=[];
-    dates.forEach(d=>{
-      let dayTotal=0;
-      codes.forEach(c=>{dayTotal+=(finalPlan[c]||{})[d]||0});
-      if(dayTotal>capacity)overDays.push({date:d,total:dayTotal,over:dayTotal-capacity});
+    // 2. 그룹 스펙 검사 (강선/높이/부직포 미입력 그룹)
+    const missing=getMissingSpecGroups(groupSpec);
+    if(missing.length>0){setApsGate({missing});return}
+    // 3. 시뮬 실행
+    runScenarioSim();
+  };
+  // 모달이 열려있을 때 안전재고·capacity·코일러·휴일 변경 시 자동 재시뮬
+  useEffect(()=>{
+    if(!apsModal)return;
+    const dts=apsModal.dates;
+    const sh=extractShortages(inv,plan,codes,sd,dts,safetyDays,springMonthlyAvg);
+    const r1=runDueDateFirst(sh,dts,capacity,groupSpec,coilerMin,holidays);
+    const r2=runChangeoverMin(sh,dts,capacity,groupSpec,coilerMin,holidays);
+    const alpha=apsModal.alpha;
+    const r3=runBalanced(sh,dts,capacity,groupSpec,alpha,coilerMin,holidays);
+    setApsModal(prev=>prev?{
+      ...prev,
+      shortages:sh,
+      scenarios:[
+        {id:'due',name:'납기 우선',desc:'납기 임박순으로 부족분만 즉시 생산. 교체 비용 무시.',result:r1,metrics:computeScenarioMetrics(r1,sh)},
+        {id:'co',name:'교체 최소',desc:'같은 그룹을 묶어 한 번에 생산. 미리 적재로 교체 횟수 최소화.',result:r2,metrics:computeScenarioMetrics(r2,sh)},
+        {id:'mid',name:'중간 (α='+alpha.toFixed(1)+')',desc:'납기 vs 교체 가중 평균. 슬라이더로 균형 조절.',result:r3,metrics:computeScenarioMetrics(r3,sh)},
+      ]
+    }:null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[safetyDays,coilerMin,capacity&&capacity.A,capacity&&capacity.B,(holidays||[]).length]);
+  const runScenarioSim=(opts)=>{
+    const sd2=opts&&opts.startDate||startDate;
+    const ed2=opts&&opts.endDate||endDate;
+    const dts=buildDateRange(sd2,ed2);
+    const sh=extractShortages(inv,plan,codes,sd,dts,safetyDays,springMonthlyAvg);
+    if(sh.length===0){alert(`기간 내 부족 품목이 없습니다.\n(안전재고 ${safetyDays}일 기준)`);return}
+    const r1=runDueDateFirst(sh,dts,capacity,groupSpec,coilerMin,holidays);
+    const r2=runChangeoverMin(sh,dts,capacity,groupSpec,coilerMin,holidays);
+    const alpha=opts&&typeof opts.alpha==='number'?opts.alpha:0.5;
+    const r3=runBalanced(sh,dts,capacity,groupSpec,alpha,coilerMin,holidays);
+    setApsModal({
+      dates:dts,shortages:sh,alpha,
+      scenarios:[
+        {id:'due',name:'납기 우선',desc:'납기 임박순으로 부족분만 즉시 생산. 교체 비용 무시.',result:r1,metrics:computeScenarioMetrics(r1,sh)},
+        {id:'co',name:'교체 최소',desc:'같은 그룹을 묶어 한 번에 생산. 미리 적재로 교체 횟수 최소화.',result:r2,metrics:computeScenarioMetrics(r2,sh)},
+        {id:'mid',name:'중간 (α='+alpha.toFixed(1)+')',desc:'납기 vs 교체 가중 평균. 슬라이더로 균형 조절.',result:r3,metrics:computeScenarioMetrics(r3,sh)},
+      ]
     });
-    if(overDays.length>0){setCapWarn({overDays,plan:finalPlan});return}
-    setMp(finalPlan);
-    const totalProd=Object.values(finalPlan).reduce((a,obj)=>a+Object.values(obj).reduce((s,v)=>s+v,0),0);
-    alert(`자동 계획 완료!\n생산 품목: ${Object.keys(finalPlan).length}종\n총 생산량: ${totalProd}개`);
+  };
+  const applyScenarioToMp=(scenario)=>{
+    if(!apsModal||!scenario)return;
+    const dts=apsModal.dates;
+    const newSeg=scheduleToMp(scenario.result.schedule,dts);
+    // 시작일~종료일 범위만 덮어쓰기, 그 외 mp는 보존
+    const merged={};
+    Object.entries(mp).forEach(([c,dmap])=>{
+      const kept={};
+      Object.entries(dmap||{}).forEach(([d,v])=>{
+        if(!dts.includes(d))kept[d]=v;
+      });
+      if(Object.keys(kept).length>0)merged[c]=kept;
+    });
+    Object.entries(newSeg).forEach(([c,dmap])=>{
+      if(!merged[c])merged[c]={};
+      Object.entries(dmap).forEach(([d,q])=>{merged[c][d]=q});
+    });
+    setMp(merged);LS('mp',merged);
+    // lineOverride: 시뮬 영역만 새로 결정, 그 외는 보존
+    const newOv=scheduleToLineOverride(scenario.result.schedule,dts);
+    const mergedOv={};
+    Object.entries(lineOverride).forEach(([k,v])=>{
+      const d=k.length>=10?k.slice(-10):'';
+      if(!dts.includes(d))mergedOv[k]=v;
+    });
+    Object.entries(newOv).forEach(([k,v])=>{mergedOv[k]=v});
+    setLineOverride(mergedOv);LS('lineOverride',mergedOv);
+    setApsModal(null);
+    const m=scenario.metrics;
+    alert(`'${scenario.name}' 적용 완료\n· 교체 ${m.changeoverCount}회 (${m.changeoverMin}분)\n· 총 생산 ${m.totalProduced}개\n· 납기준수 ${(m.onTimeRate*100).toFixed(0)}%${m.totalShort>0?` (남은 부족 ${m.totalShort}개)`:''}`);
   };
 
   const applyCapWarn=()=>{
     if(!capWarn)return;
     setMp(capWarn.plan);setCapWarn(null);
     const totalProd=Object.values(capWarn.plan).reduce((a,obj)=>a+Object.values(obj).reduce((s,v)=>s+v,0),0);
-    alert(`상향 capacity(${capacity}개/일)로 적용.\n총 생산량: ${totalProd}개`);
+    alert(`상향 capacity(${totalCapacity(capacity)}개/일 합계)로 적용.\n총 생산량: ${totalProd}개`);
   };
 
   // Color for equipment lines
   const eqColor=(group)=>GC[group]||'#6b7280';
 
   return(<div className={expanded?'fixed inset-0 z-50 bg-[#FAF8F6] p-6 overflow-auto':''}>
-    <div className="flex items-center gap-2 mb-2">
+    <div className="hidden md:flex items-center gap-2 mb-2">
       <span className="text-sm font-medium">일자별 상세</span>
       {isA&&<button onClick={autoPlan} className="text-xs px-4 py-1.5 rounded-lg bg-blue-600 text-white font-medium hover:bg-blue-700 transition-colors shadow-sm">⚡ 자동 계획</button>}
       <button onClick={()=>setExpanded(!expanded)} className="text-xs px-3 py-1.5 rounded-lg border border-gray-200 text-gray-500 hover:bg-gray-100">{expanded?'🗗 축소':'🗖 확대'}</button>
@@ -846,6 +945,7 @@ function Plan({inv,plan,mp,setMp,isA,capacity,setCapacity,sd,codes,groups,comple
         {shortOnly?'⚠ 부족분만 보기 ON':'⚠ 부족분만 보기'}
       </button>
       {shortOnly&&<span className="text-xs text-gray-400">{fl.length}종 부족</span>}
+      {isA&&<button onClick={()=>setMpHistoryOpen(true)} className="text-xs px-3 py-1.5 rounded-lg border border-gray-200 text-gray-500 hover:bg-gray-100" title="과거 시점으로 되돌리기">⏱ 되돌리기{mpHistory&&mpHistory.length>0?` (${mpHistory.length})`:''}</button>}
       <div className="ml-auto">
         <select value={gf} onChange={e=>setGf(e.target.value)} className="text-xs px-2 py-1.5 border border-gray-200 rounded-lg bg-[#FFFFFF] focus:outline-none focus:ring-2 focus:ring-blue-200">
           <option value="전체">전체 그룹 ({codes.length}종)</option>
@@ -853,18 +953,307 @@ function Plan({inv,plan,mp,setMp,isA,capacity,setCapacity,sd,codes,groups,comple
         </select>
       </div>
     </div>
-    <div className="flex items-center gap-2 mb-4">
+    <div className="hidden md:flex items-center gap-2 mb-4">
       <span className="text-xs text-gray-500">기간:</span>
       <input type="date" value={startDate} onChange={e=>setStartDate(e.target.value)} className="text-xs px-2 py-1.5 border border-gray-200 rounded-lg bg-[#FFFFFF] focus:outline-none focus:ring-2 focus:ring-blue-200"/>
       <span className="text-xs text-gray-400">~</span>
       <input type="date" value={endDate} onChange={e=>setEndDate(e.target.value)} className="text-xs px-2 py-1.5 border border-gray-200 rounded-lg bg-[#FFFFFF] focus:outline-none focus:ring-2 focus:ring-blue-200"/>
       <span className="text-xs text-gray-400">({dates.length}일)</span>
       {[['1주',7],['2주',14],['3주',21],['1개월',30]].map(([l,d])=><button key={l} onClick={()=>{const t=new Date(startDate);t.setDate(t.getDate()+d-1);setEndDate(t.toISOString().slice(0,10))}} className="text-xs px-2.5 py-1.5 rounded-lg border border-gray-200 text-gray-500 hover:bg-gray-100">{l}</button>)}
+      {isA&&<button onClick={()=>setHolidaysOpen(true)} className="ml-auto text-xs px-3 py-1.5 rounded-lg border border-gray-200 text-gray-500 hover:bg-gray-100" title="공휴일·휴무일 등록">📅 사업장 월력{(holidays||[]).length>0?` (${holidays.length})`:''}</button>}
     </div>
+    {apsGate&&<div className="fixed inset-0 bg-black/30 z-50 flex items-center justify-center" onClick={()=>setApsGate(null)}>
+      <div className="bg-white rounded-xl shadow-2xl p-6 max-w-md w-full mx-4" onClick={e=>e.stopPropagation()}>
+        <h3 className="text-base font-bold text-amber-700 mb-3">⚠ 그룹 스펙 입력 필요</h3>
+        <p className="text-xs text-gray-600 mb-3 leading-relaxed">교체시간 계산을 위해 그룹별 강선/높이/부직포 스펙이 필요합니다.<br/>미입력 시 교체 최소 시나리오는 의미 있는 결과를 내지 못합니다.</p>
+        <div className="bg-amber-50 border border-amber-200 rounded p-3 mb-4 text-xs space-y-1 max-h-48 overflow-auto">
+          <div className="font-medium text-amber-700 mb-2">미입력 {apsGate.missing.length}/{GROUP_LIST.length} 그룹</div>
+          {apsGate.missing.map(m=>(
+            <div key={m.group} className="text-amber-700">· {m.group} <span className="text-amber-500">({m.fields.join('·')} 미입력)</span></div>
+          ))}
+        </div>
+        <div className="flex gap-2">
+          <button onClick={()=>{if(goToTab)goToTab('groupSpec');setApsGate(null)}} className="flex-1 py-2 text-xs bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium">그룹 스펙 입력하러 가기</button>
+          <button onClick={()=>setApsGate(null)} className="px-4 py-2 text-xs border border-gray-200 text-gray-500 rounded-lg hover:bg-gray-50">닫기</button>
+        </div>
+      </div>
+    </div>}
+    {apsModal&&<div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={()=>setApsModal(null)}>
+      <div className="bg-white rounded-xl shadow-2xl p-6 w-full max-w-5xl max-h-[90vh] overflow-auto" onClick={e=>e.stopPropagation()}>
+        <div className="flex items-baseline justify-between mb-4">
+          <div>
+            <h3 className="text-base font-bold">⚡ 자동 계획 — 시나리오 선택</h3>
+            <div className="text-xs text-gray-500 mt-1">{apsModal.dates[0]} ~ {apsModal.dates[apsModal.dates.length-1]} ({apsModal.dates.length}일) · 부족 이벤트 {apsModal.shortages.length}건 · 안전재고 {safetyDays}일</div>
+          </div>
+          <button onClick={()=>setApsModal(null)} className="text-gray-400 hover:text-gray-600 text-lg">✕</button>
+        </div>
+        <div className="bg-gray-50 rounded-lg px-3 py-2 mb-4 text-xs flex flex-wrap items-center gap-3">
+          <span className="text-gray-500">중간 균형:</span>
+          <span className="text-gray-400">교체</span>
+          <input type="range" min="0" max="1" step="0.1" value={apsModal.alpha} onChange={e=>{
+            const a=parseFloat(e.target.value);
+            const r3=runBalanced(apsModal.shortages,apsModal.dates,capacity,groupSpec,a,coilerMin,holidays);
+            const next={...apsModal,alpha:a,scenarios:apsModal.scenarios.map(s=>s.id==='mid'?{...s,name:'중간 (α='+a.toFixed(1)+')',result:r3,metrics:computeScenarioMetrics(r3,apsModal.shortages)}:s)};
+            setApsModal(next);
+          }} className="w-32"/>
+          <span className="text-gray-400">납기</span>
+          <span className="text-gray-700 font-medium">α={apsModal.alpha.toFixed(1)}</span>
+          <span className="text-gray-300">|</span>
+          <span className="text-gray-500">안전재고:</span>
+          <input type="number" min="0" max="30" value={safetyDays} onChange={e=>{const v=parseInt(e.target.value);if(!isNaN(v)&&setSafetyDays)setSafetyDays(v)}} className="w-14 px-2 py-1 border border-gray-200 rounded bg-white text-center"/>
+          <span className="text-gray-400">일</span>
+          <button onClick={()=>runScenarioSim({alpha:apsModal.alpha})} className="ml-auto px-3 py-1.5 bg-gray-900 text-white rounded hover:bg-gray-800" title="외부에서 데이터(재고·plan·매핑) 변경 시 강제 재계산">🔄 강제 재계산</button>
+        </div>
+        <div className="grid grid-cols-3 gap-3 mb-4">
+          {apsModal.scenarios.map(s=>(
+            <div key={s.id} className="border-2 border-gray-200 rounded-lg p-4 hover:border-blue-400 hover:shadow-md transition-all flex flex-col">
+              <div className="text-sm font-bold mb-1">{s.name}</div>
+              <div className="text-xs text-gray-500 mb-3 leading-relaxed flex-grow">{s.desc}</div>
+              <div className="space-y-1 text-xs mb-3">
+                <div className="flex justify-between"><span className="text-gray-500">교체 횟수</span><span className="font-bold">{s.metrics.changeoverCount}회</span></div>
+                <div className="flex justify-between"><span className="text-gray-500">교체 시간</span><span className="font-bold">{s.metrics.changeoverMin}분</span></div>
+                <div className="flex justify-between" title="진짜 출고 펑크(재고 마이너스) 기준"><span className="text-gray-500">납기 준수율</span><span className={`font-bold ${s.metrics.onTimeRate>=0.95?'text-emerald-600':s.metrics.onTimeRate>=0.8?'text-amber-600':'text-red-600'}`}>{(s.metrics.onTimeRate*100).toFixed(0)}%</span></div>
+                <div className="flex justify-between" title="안전재고선까지 채운 비율 (capacity 부족 시 후순위)"><span className="text-gray-500">안전재고 충족률</span><span className={`font-bold ${s.metrics.safetyRate>=0.9?'text-emerald-600':s.metrics.safetyRate>=0.7?'text-amber-600':'text-gray-500'}`}>{(s.metrics.safetyRate*100).toFixed(0)}%</span></div>
+                <div className="flex justify-between"><span className="text-gray-500">총 생산량</span><span className="font-bold">{s.metrics.totalProduced.toLocaleString()}개</span></div>
+                {s.metrics.realShort>0&&<div className="flex justify-between text-red-600"><span>출고 펑크</span><span className="font-bold">{s.metrics.realShort}개</span></div>}
+              </div>
+              <button onClick={()=>{
+                const staged=JSON.parse(JSON.stringify(s.result.schedule));
+                setApsEditor({dates:apsModal.dates,shortages:apsModal.shortages,scenarioName:s.name,originalMetrics:s.metrics,stagedSchedule:staged});
+                setApsModal(null);
+              }} className="w-full py-2 text-xs bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium">이 플랜 선택 →</button>
+            </div>
+          ))}
+        </div>
+        <div className="border border-gray-200 rounded-lg p-3">
+          <div className="text-xs text-gray-500 mb-2">시나리오별 미니 간트 (라인별 일자 색 = 그날 마지막 그룹, 빨간 막대 = 교체 발생)</div>
+          {apsModal.scenarios.map(s=>(
+            <div key={s.id} className="mb-3 last:mb-0">
+              <div className="text-xs font-medium mb-1">{s.name}</div>
+              {['B','A'].map(line=>(
+                <div key={line} className="flex items-center gap-1 mb-0.5">
+                  <span className="text-xs text-gray-400 w-12">{line==='A'?'2라인':'1라인'}</span>
+                  <div className="flex flex-1 gap-px">
+                    {apsModal.dates.map(d=>{
+                      const items=s.result.schedule[line][d].items;
+                      const grp=items.length>0?items[items.length-1].group:null;
+                      const hasCo=items.some(it=>it.changeoverMin>0);
+                      return <div key={d} className="flex-1 h-4 relative" style={{background:grp?GC[grp]:'#f3f4f6',opacity:grp?1:0.3}} title={`${d} ${grp||'(휴지)'}`}>
+                        {hasCo&&<div className="absolute inset-y-0 left-0 w-0.5 bg-red-500"></div>}
+                      </div>;
+                    })}
+                  </div>
+                </div>
+              ))}
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>}
+    {apsEditor&&(()=>{
+      const fmt2=d=>{const dt=new Date(d);const dd=['일','월','화','수','목','금','토'];return `${dt.getMonth()+1}/${dt.getDate()}(${dd[dt.getDay()]})`};
+      const orig=apsEditor.originalMetrics;
+      const cur=editorMetrics||orig;
+      const rows=[];
+      apsEditor.dates.forEach(d=>{
+        const aItems=apsEditor.stagedSchedule.A[d].items;
+        const bItems=apsEditor.stagedSchedule.B[d].items;
+        const dayItems=[];
+        aItems.forEach((it,i)=>dayItems.push({line:'A',idx:i,it}));
+        bItems.forEach((it,i)=>dayItems.push({line:'B',idx:i,it}));
+        if(dayItems.length===0)return;
+        dayItems.forEach((di,i)=>rows.push({date:d,showDate:i===0,...di}));
+      });
+      const cmpDelta=(a,b,unit='')=>{
+        if(a===b)return null;
+        const diff=a-b;
+        return <span className={`ml-1 text-xs ${diff>0?'text-red-500':'text-emerald-600'}`}>({diff>0?'+':''}{diff}{unit})</span>;
+      };
+      return <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={()=>{if(confirm('편집 내용을 버리고 닫으시겠습니까?'))setApsEditor(null)}}>
+        <div className="bg-white rounded-xl shadow-2xl p-6 w-full max-w-6xl max-h-[95vh] flex flex-col" onClick={e=>e.stopPropagation()}>
+          <div className="flex items-baseline justify-between mb-3">
+            <div>
+              <h3 className="text-base font-bold">⚡ 자동 계획 — 편집</h3>
+              <div className="text-xs text-gray-500 mt-1">시나리오: <span className="font-medium text-gray-700">{apsEditor.scenarioName}</span> · {fmt2(apsEditor.dates[0])} ~ {fmt2(apsEditor.dates[apsEditor.dates.length-1])} ({apsEditor.dates.length}일) · 부족 {apsEditor.shortages.length}건</div>
+            </div>
+            <button onClick={()=>{if(confirm('편집 내용을 버리고 닫으시겠습니까?'))setApsEditor(null)}} className="text-gray-400 hover:text-gray-600 text-lg">✕</button>
+          </div>
+          <div className="grid grid-cols-3 md:grid-cols-6 gap-2 text-xs mb-3">
+            {[
+              ['교체 횟수',cur.changeoverCount,orig.changeoverCount,'회'],
+              ['교체 시간',cur.changeoverMin,orig.changeoverMin,'분'],
+              ['납기 준수율',(cur.onTimeRate*100).toFixed(0),(orig.onTimeRate*100).toFixed(0),'%'],
+              ['안전재고 충족률',(cur.safetyRate*100).toFixed(0),(orig.safetyRate*100).toFixed(0),'%'],
+              ['총 생산량',cur.totalProduced,orig.totalProduced,'개'],
+              ['capacity 초과일',cur.exceed||0,0,'일'],
+            ].map(([label,v,o,unit])=>(
+              <div key={label} className="border border-gray-200 rounded-lg px-3 py-2 bg-gray-50">
+                <div className="text-gray-500 mb-0.5">{label}</div>
+                <div className="font-bold flex items-baseline">
+                  <span>{typeof v==='number'?v.toLocaleString():v}{unit}</span>
+                  {cmpDelta(Number(v),Number(o),unit)}
+                </div>
+              </div>
+            ))}
+          </div>
+          <div className="flex-1 overflow-auto border border-gray-200 rounded-lg">
+            <table className="w-full text-xs">
+              <thead className="sticky top-0 bg-gray-50 border-b border-gray-200">
+                <tr>
+                  <th className="text-left px-3 py-2 font-medium text-gray-500 w-24">날짜</th>
+                  <th className="text-left px-2 py-2 font-medium text-gray-500 w-20">라인</th>
+                  <th className="text-left px-2 py-2 font-medium text-gray-500 w-28">그룹</th>
+                  <th className="text-left px-3 py-2 font-medium text-gray-500">코드 / 품명</th>
+                  <th className="text-right px-2 py-2 font-medium text-gray-500 w-24">수량</th>
+                  <th className="text-center px-2 py-2 font-medium text-gray-500 w-16">교체</th>
+                  <th className="text-center px-2 py-2 font-medium text-gray-500 w-12">삭제</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.length===0?<tr><td colSpan={7} className="text-center py-8 text-gray-400">편집할 항목이 없습니다 (모두 삭제됨)</td></tr>:
+                  rows.map((r,ri)=>(
+                    <tr key={`${r.date}_${r.line}_${r.idx}_${ri}`} className="border-b border-gray-100 hover:bg-gray-50">
+                      <td className="px-3 py-1.5 text-gray-500">{r.showDate?fmt2(r.date):''}</td>
+                      <td className="px-2 py-1.5">
+                        <select value={r.line} onChange={e=>updateStagedItem(r.line,r.date,r.idx,{line:e.target.value})}
+                          className="text-xs px-2 py-1 border border-gray-200 rounded bg-white cursor-pointer focus:outline-none focus:ring-2 focus:ring-blue-200">
+                          <option value="A">2라인</option>
+                          <option value="B">1라인</option>
+                        </select>
+                      </td>
+                      <td className="px-2 py-1.5"><Tag g={r.it.group}/></td>
+                      <td className="px-3 py-1.5">
+                        <span className="font-mono text-gray-500 text-xs">{r.it.code}</span>
+                        <span className="ml-2 text-gray-700">{sd[r.it.code]?sd[r.it.code].n:''}</span>
+                      </td>
+                      <td className="px-2 py-1.5 text-right">
+                        <input type="number" min="0" value={r.it.qty} onChange={e=>{const v=parseInt(e.target.value);if(!isNaN(v)&&v>=0)updateStagedItem(r.line,r.date,r.idx,{qty:v})}}
+                          className="w-20 text-right px-2 py-1 border border-blue-200 rounded bg-blue-50 text-blue-700 font-medium text-xs focus:outline-none focus:ring-2 focus:ring-blue-300"/>
+                      </td>
+                      <td className="px-2 py-1.5 text-center">{r.it.changeoverMin>0?<span className="text-red-500 font-medium">{r.it.changeoverMin}m</span>:<span className="text-gray-300">-</span>}</td>
+                      <td className="px-2 py-1.5 text-center">
+                        <button onClick={()=>{if(confirm('이 항목을 삭제하시겠습니까?'))updateStagedItem(r.line,r.date,r.idx,null)}}
+                          className="text-gray-400 hover:text-red-500" title="삭제">🗑</button>
+                      </td>
+                    </tr>
+                  ))
+                }
+              </tbody>
+            </table>
+          </div>
+          <div className="flex gap-2 mt-4">
+            <button onClick={()=>{
+              if(confirm('편집 내용을 버리고 시나리오 선택 화면으로 돌아갈까요?')){
+                setApsEditor(null);
+                runScenarioSim();
+              }
+            }} className="px-3 py-2 text-xs border border-gray-200 text-gray-500 rounded-lg hover:bg-gray-50">← 시나리오 다시 선택</button>
+            <button onClick={()=>{if(confirm('편집 내용을 버리고 닫으시겠습니까?'))setApsEditor(null)}} className="px-3 py-2 text-xs border border-gray-200 text-gray-500 rounded-lg hover:bg-gray-50">취소</button>
+            <div className="flex-1"/>
+            <button onClick={()=>{
+              if(rows.length===0){alert('편집할 항목이 없습니다.');return}
+              if(confirm(`확정 시 시뮬 기간(${apsEditor.dates.length}일)의 mp가 위 내용으로 덮어쓰여집니다.\n그 외 일자는 보존됩니다.\n\n계속하시겠습니까?`))commitEditor();
+            }} className="px-6 py-2 text-xs bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium">✓ 확정 적용</button>
+          </div>
+        </div>
+      </div>;
+    })()}
+    {mpHistoryOpen&&<div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={()=>setMpHistoryOpen(false)}>
+      <div className="bg-white rounded-xl shadow-2xl p-6 w-full max-w-3xl max-h-[80vh] flex flex-col" onClick={e=>e.stopPropagation()}>
+        <div className="flex items-baseline justify-between mb-2">
+          <h3 className="text-base font-bold">⏱ 되돌리기</h3>
+          <button onClick={()=>setMpHistoryOpen(false)} className="text-gray-400 hover:text-gray-600 text-lg">✕</button>
+        </div>
+        <p className="text-xs text-gray-500 mb-3 leading-relaxed">큰 변경(자동 계획 적용, 전체 초기화 등) 직전 상태를 최대 20개까지 보관합니다.<br/>복원 시 현재 상태도 자동 스냅샷에 저장되어 다시 되돌릴 수 있습니다.</p>
+        <div className="flex-1 overflow-auto border border-gray-200 rounded-lg">
+          <table className="w-full text-xs">
+            <thead className="sticky top-0 bg-gray-50 border-b border-gray-200">
+              <tr>
+                <th className="text-left px-3 py-2 font-medium text-gray-500 w-32">시간</th>
+                <th className="text-left px-3 py-2 font-medium text-gray-500 w-20">유형</th>
+                <th className="text-left px-3 py-2 font-medium text-gray-500">라벨</th>
+                <th className="text-center px-2 py-2 font-medium text-gray-500 w-16">항목수</th>
+                <th className="text-center px-2 py-2 font-medium text-gray-500 w-20">복원</th>
+              </tr>
+            </thead>
+            <tbody>
+              {(mpHistory||[]).length===0?<tr><td colSpan={5} className="text-center py-8 text-gray-400">스냅샷 없음 (큰 변경 액션을 수행하면 자동 기록됩니다)</td></tr>:
+                (mpHistory||[]).map((snap,i)=>{
+                  const itemCount=Object.values(snap.mp||{}).reduce((a,dmap)=>a+Object.keys(dmap||{}).length,0);
+                  const typeLabel=({aps:'자동계획',reset:'초기화',restore:'복원',manual:'수동',generic:'기타'})[snap.type]||'기타';
+                  const typeCls=({aps:'bg-blue-50 text-blue-600',reset:'bg-red-50 text-red-600',restore:'bg-purple-50 text-purple-600',manual:'bg-emerald-50 text-emerald-600',generic:'bg-gray-100 text-gray-500'})[snap.type]||'bg-gray-100 text-gray-500';
+                  return(<tr key={i} className="border-b border-gray-100 hover:bg-gray-50">
+                    <td className="px-3 py-2 text-gray-500 whitespace-nowrap">{new Date(snap.ts).toLocaleString('ko-KR',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'})}</td>
+                    <td className="px-3 py-2"><span className={`px-2 py-0.5 rounded ${typeCls}`}>{typeLabel}</span></td>
+                    <td className="px-3 py-2 text-gray-700">{snap.label}</td>
+                    <td className="px-2 py-2 text-center text-gray-500">{itemCount}</td>
+                    <td className="px-2 py-2 text-center">
+                      <button onClick={()=>restoreSnapshot(snap)} className="text-xs px-2 py-1 border border-blue-200 text-blue-600 rounded hover:bg-blue-50">↩ 복원</button>
+                    </td>
+                  </tr>);
+                })
+              }
+            </tbody>
+          </table>
+        </div>
+        <div className="flex gap-2 mt-4">
+          <button onClick={createManualSnapshot} className="px-3 py-2 text-xs border border-emerald-200 text-emerald-600 rounded-lg hover:bg-emerald-50">+ 수동 스냅샷 만들기</button>
+          <div className="flex-1"/>
+          <button onClick={()=>setMpHistoryOpen(false)} className="px-4 py-2 text-xs border border-gray-200 text-gray-500 rounded-lg hover:bg-gray-50">닫기</button>
+        </div>
+      </div>
+    </div>}
+    {holidaysOpen&&<div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={()=>setHolidaysOpen(false)}>
+      <div className="bg-white rounded-xl shadow-2xl p-6 w-full max-w-2xl max-h-[80vh] flex flex-col" onClick={e=>e.stopPropagation()}>
+        <div className="flex items-baseline justify-between mb-2">
+          <h3 className="text-base font-bold">📅 사업장 월력</h3>
+          <button onClick={()=>setHolidaysOpen(false)} className="text-gray-400 hover:text-gray-600 text-lg">✕</button>
+        </div>
+        <p className="text-xs text-gray-500 mb-3 leading-relaxed">공휴일·대체공휴일·회사 휴무일을 직접 등록하세요. 등록된 일자는 자동 계획에서 생산 0으로 처리됩니다.<br/>※ 토/일은 자동으로 휴일 처리되어 별도 등록 불필요</p>
+        <div className="flex items-center gap-2 mb-3 pb-3 border-b border-gray-200">
+          <input type="date" value={newHolidayDate} onChange={e=>setNewHolidayDate(e.target.value)} className="text-xs px-2 py-1.5 border border-gray-200 rounded bg-white focus:outline-none focus:ring-2 focus:ring-blue-200"/>
+          <input type="text" value={newHolidayMemo} onChange={e=>setNewHolidayMemo(e.target.value)} placeholder="사유 (예: 어린이날)" className="flex-1 text-xs px-2 py-1.5 border border-gray-200 rounded bg-white focus:outline-none focus:ring-2 focus:ring-blue-200"/>
+          <button onClick={addHoliday} className="text-xs px-3 py-1.5 bg-blue-600 text-white rounded hover:bg-blue-700 font-medium">+ 추가</button>
+        </div>
+        <div className="flex-1 overflow-auto border border-gray-200 rounded-lg">
+          <table className="w-full text-xs">
+            <thead className="sticky top-0 bg-gray-50 border-b border-gray-200">
+              <tr>
+                <th className="text-left px-3 py-2 font-medium text-gray-500 w-32">날짜</th>
+                <th className="text-left px-3 py-2 font-medium text-gray-500 w-16">요일</th>
+                <th className="text-left px-3 py-2 font-medium text-gray-500">사유</th>
+                <th className="text-center px-2 py-2 font-medium text-gray-500 w-12">삭제</th>
+              </tr>
+            </thead>
+            <tbody>
+              {(holidays||[]).length===0?<tr><td colSpan={4} className="text-center py-8 text-gray-400">등록된 휴무일 없음</td></tr>:
+                (holidays||[]).map((h,i)=>{
+                  const day=new Date(h.date).getDay();
+                  const dayLabel=['일','월','화','수','목','금','토'][day];
+                  const dayCls=day===0?'text-red-500':day===6?'text-blue-500':'text-gray-500';
+                  return(<tr key={i} className="border-b border-gray-100 hover:bg-gray-50">
+                    <td className="px-3 py-2 text-gray-700 font-mono">{h.date}</td>
+                    <td className={`px-3 py-2 ${dayCls}`}>{dayLabel}</td>
+                    <td className="px-3 py-2 text-gray-700">{h.memo||'-'}</td>
+                    <td className="px-2 py-2 text-center">
+                      <button onClick={()=>{if(confirm(`${h.date} ${h.memo||''} 휴무일을 삭제하시겠습니까?`))removeHoliday(h.date)}}
+                        className="text-gray-400 hover:text-red-500" title="삭제">🗑</button>
+                    </td>
+                  </tr>);
+                })
+              }
+            </tbody>
+          </table>
+        </div>
+        <div className="flex justify-end mt-4">
+          <button onClick={()=>setHolidaysOpen(false)} className="px-4 py-2 text-xs border border-gray-200 text-gray-500 rounded-lg hover:bg-gray-50">닫기</button>
+        </div>
+      </div>
+    </div>}
     {capWarn&&<div className="fixed inset-0 bg-black/30 z-40 flex items-center justify-center" onClick={()=>setCapWarn(null)}>
       <div className="bg-white rounded-xl shadow-2xl p-6 max-w-md w-full mx-4" onClick={e=>e.stopPropagation()}>
         <h3 className="text-base font-bold text-red-600 mb-3">⚠ Capacity 초과 경고</h3>
-        <p className="text-xs text-gray-600 mb-3">다음 날짜에서 일 생산량({capacity}개)을 초과합니다:</p>
+        <p className="text-xs text-gray-600 mb-3">다음 날짜에서 일 생산량({totalCapacity(capacity)}개 합계)을 초과합니다:</p>
         <div className="space-y-2 mb-4 max-h-40 overflow-auto">{capWarn.overDays.map(od=>
           <div key={od.date} className="flex justify-between items-center px-3 py-2 bg-red-50 rounded-lg text-xs">
             <span className="font-medium">{fmt(od.date)}</span>
@@ -873,7 +1262,7 @@ function Plan({inv,plan,mp,setMp,isA,capacity,setCapacity,sd,codes,groups,comple
         )}</div>
         <div className="flex items-center gap-2 mb-4 p-3 bg-amber-50 rounded-lg">
           <span className="text-xs text-gray-600">잔업 승인 시 일 생산량:</span>
-          <input type="number" value={capacity} onChange={e=>setCapacity(parseInt(e.target.value)||260)}
+          <input type="number" value={totalCapacity(capacity)} onChange={e=>{const v=parseInt(e.target.value)||260;const half=Math.round(v/2);setCapacity({A:half,B:v-half})}}
             className="w-20 text-center px-2 py-1 border border-amber-300 rounded bg-white text-sm font-bold focus:outline-none focus:ring-2 focus:ring-amber-300"/>
           <span className="text-xs text-gray-400">개/일</span>
         </div>
@@ -955,38 +1344,58 @@ function Plan({inv,plan,mp,setMp,isA,capacity,setCapacity,sd,codes,groups,comple
               html+='.date-lbl{font-size:10px;margin-bottom:4px;font-weight:500;}';
               html+='.dash{font-size:10px;color:#d1d5db;padding:8px 0;}';
               html+='.card{padding:4px 6px;border-radius:4px;margin-bottom:3px;font-size:10px;font-weight:600;border-left:3px solid;text-align:left;}';
+              html+='.changeover{padding:3px 5px;border:1px dashed #ef4444;color:#dc2626;font-size:9px;font-weight:700;border-radius:4px;margin-bottom:3px;background:#fef2f2;text-align:center;letter-spacing:0.3px;}';
+              html+='.summary{margin-bottom:8px;padding:8px 12px;background:#fff;border:1px solid #e5e7eb;border-radius:6px;font-size:10px;color:#6b7280;}';
+              html+='.summary b{color:#374151;font-weight:600;}';
               html+='@page{size:landscape;margin:1cm;}';
               html+='</style></head><body>';
               html+='<h2>설비별 생산 흐름</h2>';
+              // 라인별 총 교체 횟수/분 누적 (요약용)
+              const printSummary={A:{count:0,min:0},B:{count:0,min:0}};
               ['B','A'].forEach(eq=>{
                 const sched=eq==='A'?equipSchedule.A:equipSchedule.B;
                 const label=eq==='B'?'1라인 (기타)':'2라인 (일룸/이브닝/키즈)';
                 const tagBg=eq==='B'?'#fff7ed':'#eff6ff';
                 const tagC=eq==='B'?'#c2410c':'#1d4ed8';
-                html+=`<div class="line ${eq==='B'?'line-b':'line-a'}"><span class="line-tag" style="background:${tagBg};color:${tagC}">${label}</span><div class="dates">`;
+                let prevGroup=null; // 라인 전체에 걸친 직전 그룹 (일자 경계 무관)
+                // 일자별 column을 미리 빌드
+                const dayColumns=[];
                 dates.forEach((d,di)=>{
                   const items=sched[d]||[];
-                  const prevItems=di>0?(sched[dates[di-1]]||[]):[];
-                  const prevG=[...new Set(prevItems.map(i=>i.group))].sort().join();
-                  const curG=[...new Set(items.map(i=>i.group))].sort().join();
-                  const changed=prevG&&curG&&prevG!==curG;
                   const day=new Date(d).getDay();
                   const dc=day===0?'#ef4444':day===6?'#3b82f6':'#374151';
-                  html+=`<div class="day"><div class="date-lbl" style="color:${dc}">${changed?'● ':''}${fmt2(d)}</div>`;
-                  if(!items.length)html+=`<div class="dash">-</div>`;
-                  items.forEach(item=>{
-                    const bg=GB_P[item.group]||'#f3f4f6',tc=GC_P[item.group]||'#6b7280';
-                    html+=`<div class="card" style="background:${bg};color:${tc};border-left-color:${tc}">${item.group}<br><span style="opacity:0.75">${item.size&&item.size!=='Z'?item.size+' ':''}${item.qty}개</span></div>`;
-                  });
-                  html+=`</div>`;
+                  let dayHtml=`<div class="day"><div class="date-lbl" style="color:${dc}">${fmt2(d)}</div>`;
+                  if(!items.length){
+                    dayHtml+=`<div class="dash">-</div>`;
+                  }else{
+                    items.forEach(item=>{
+                      // 직전 그룹과 다르면 교체 박스 먼저 출력
+                      if(prevGroup&&prevGroup!==item.group){
+                        const co=changeoverTime(prevGroup,item.group,groupSpec,coilerMin);
+                        if(co>0){
+                          dayHtml+=`<div class="changeover">↻ 교체 ${co}m</div>`;
+                          printSummary[eq].count++;
+                          printSummary[eq].min+=co;
+                        }
+                      }
+                      const bg=GB_P[item.group]||'#f3f4f6',tc=GC_P[item.group]||'#6b7280';
+                      dayHtml+=`<div class="card" style="background:${bg};color:${tc};border-left-color:${tc}">${item.group}<br><span style="opacity:0.75">${item.size&&item.size!=='Z'?item.size+' ':''}${item.qty}개</span></div>`;
+                      prevGroup=item.group;
+                    });
+                  }
+                  dayHtml+=`</div>`;
+                  dayColumns.push(dayHtml);
                 });
-                html+=`</div></div>`;
+                const sm=printSummary[eq];
+                html+=`<div class="line ${eq==='B'?'line-b':'line-a'}"><span class="line-tag" style="background:${tagBg};color:${tagC}">${label}</span>`;
+                html+=`<div class="summary">교체 <b>${sm.count}회</b> · 총 <b>${sm.min}분</b> (${(sm.min/60).toFixed(1)}시간)</div>`;
+                html+=`<div class="dates">${dayColumns.join('')}</div></div>`;
               });
               html+='</body></html>';
               w.document.write(html);w.document.close();setTimeout(()=>w.print(),400);
             }} className="px-2 py-1 rounded border border-gray-200 text-gray-500 hover:bg-gray-100 flex items-center gap-1"><span>🖨</span><span>인쇄</span></button>
-          <span className="px-2 py-1 bg-orange-50 text-orange-700 rounded font-medium">1라인 교체 {equipSchedule.coB}회</span>
-          <span className="px-2 py-1 bg-blue-50 text-blue-700 rounded font-medium">2라인 교체 {equipSchedule.coA}회</span>
+          <span className="px-2 py-1 bg-orange-50 text-orange-700 rounded font-medium" title={`총 ${equipSchedule.coBm}분 (${(equipSchedule.coBm/60).toFixed(1)}시간)`}>1라인 교체 {equipSchedule.coB}회 ({equipSchedule.coBm}분)</span>
+          <span className="px-2 py-1 bg-blue-50 text-blue-700 rounded font-medium" title={`총 ${equipSchedule.coAm}분 (${(equipSchedule.coAm/60).toFixed(1)}시간)`}>2라인 교체 {equipSchedule.coA}회 ({equipSchedule.coAm}분)</span>
         </div>
       </div>
       {['B','A'].map(eq=>{
@@ -1031,7 +1440,7 @@ function Plan({inv,plan,mp,setMp,isA,capacity,setCapacity,sd,codes,groups,comple
                   setDragItem(null);
                 }}
               >
-                <div className={`text-xs mb-1 ${day===0?'text-red-400':day===6?'text-blue-400':'text-gray-500'}`}>{fmt(d)}</div>
+                <div className={`relative group text-xs mb-1 ${(holidaySet.has(d)||day===0)?'text-red-400':day===6?'text-blue-400':'text-gray-500'}`}>{fmt(d)}{holidaySet.has(d)&&getHolidayMemo(d)&&<span className="pointer-events-none absolute z-50 hidden group-hover:block left-1/2 -translate-x-1/2 top-full mt-1 bg-gray-900 text-white text-xs font-normal px-2 py-1 rounded whitespace-nowrap shadow-lg">{getHolidayMemo(d)}</span>}</div>
                 {items.length===0?<div className="h-16 flex items-center justify-center"><span className="text-xs text-gray-300">-</span></div>:
                 <div className="space-y-1">
                   {items.map((item,ii)=>{
@@ -1130,12 +1539,12 @@ function Plan({inv,plan,mp,setMp,isA,capacity,setCapacity,sd,codes,groups,comple
     </div>}
 
 
-    <div className="border border-gray-200 rounded-lg overflow-auto" style={{maxHeight:expanded?'calc(100vh - 220px)':'70vh'}}>
+    <div className="hidden md:block border border-gray-200 rounded-lg overflow-auto" style={{maxHeight:expanded?'calc(100vh - 220px)':'70vh'}}>
       <table className="w-full text-xs" style={{minWidth:dates.length*130+200,borderSpacing:0,borderCollapse:'separate'}}>
         <thead className="sticky top-0 z-20" style={{boxShadow:'0 2px 4px rgba(0,0,0,0.08)'}}><tr>
           <th className="text-left px-3 py-2 font-medium text-gray-500 sticky left-0 z-30 bg-[#EFECE8] border-b border-gray-200" style={{minWidth:200}}>반제품명</th>
           <th className="text-right px-2 py-2 font-medium text-gray-500 w-14 sticky left-[200px] z-30 whitespace-nowrap bg-[#EFECE8] border-b border-gray-200">현재고</th>
-          {dates.map(d=>{const day=new Date(d).getDay();const dc2=day===0?'text-red-400':day===6?'text-blue-400':'text-gray-700';return <th key={d} colSpan={3} className={`text-center px-1 py-2 font-medium border-l border-b border-gray-200 bg-[#EFECE8] ${dc2}`}>{fmt(d)}</th>})}
+          {dates.map(d=>{const day=new Date(d).getDay();const isHoliday=holidaySet.has(d);const dc2=(isHoliday||day===0)?'text-red-400':day===6?'text-blue-400':'text-gray-700';const memo=isHoliday?getHolidayMemo(d):'';return <th key={d} colSpan={3} className={`relative group text-center px-1 py-2 font-medium border-l border-b border-gray-200 bg-[#EFECE8] ${dc2}`}>{fmt(d)}{memo&&<span className="pointer-events-none absolute z-50 hidden group-hover:block left-1/2 -translate-x-1/2 top-full mt-1 bg-gray-900 text-white text-xs font-normal px-2 py-1 rounded whitespace-nowrap shadow-lg">{memo}</span>}</th>})}
         </tr><tr>
           <th className="sticky left-0 z-30 bg-[#EFECE8] border-b border-gray-300"></th><th className="sticky left-[200px] z-30 bg-[#EFECE8] border-b border-gray-300"></th>
           {dates.map(d=><Fragment key={d}>
@@ -1193,8 +1602,8 @@ function Plan({inv,plan,mp,setMp,isA,capacity,setCapacity,sd,codes,groups,comple
             {dates.map(d=>{
               const dayProd=codes.reduce((a,c)=>a+(getMpQty(mp,c,d)),0);
               return <Fragment key={d}>
-                <td className={`text-center px-1 py-1 font-bold border-l border-gray-200 ${dayProd>capacity?'text-red-600 bg-red-100':'text-gray-400'}`} colSpan={3}>
-                  {dayProd>0?dayProd:''}{dayProd>capacity?' ⚠':''}
+                <td className={`text-center px-1 py-1 font-bold border-l border-gray-200 ${dayProd>totalCapacity(capacity)?'text-red-600 bg-red-100':'text-gray-400'}`} colSpan={3}>
+                  {dayProd>0?dayProd:''}{dayProd>totalCapacity(capacity)?' ⚠':''}
                 </td>
               </Fragment>
             })}
@@ -1218,7 +1627,24 @@ function Plan({inv,plan,mp,setMp,isA,capacity,setCapacity,sd,codes,groups,comple
   </div>);
 }
 
-function Inv({inv,setInv,save,capacity,setCapacity,sd,codes,groups}){
+function Inv({inv,setInv,setTxns,addTxn,capacity,setCapacity,sd,codes,groups,safetyDays,setSafetyDays,coilerMin,setCoilerMin,liveInv,plan,springMonthlyAvg,groupSpec}){
+  const[preview,setPreview]=useState(null); // {days:슬라이더 값}
+  const previewMetrics=useMemo(()=>{
+    if(!preview||!liveInv||!springMonthlyAvg||!plan)return null;
+    const today=new Date();const end=new Date();end.setDate(today.getDate()+20);
+    const dates=buildDateRange(dateToYMD(today),dateToYMD(end));
+    const sh1=extractShortages(liveInv,plan,codes,sd,dates,safetyDays==null?7:safetyDays,springMonthlyAvg);
+    const sh2=extractShortages(liveInv,plan,codes,sd,dates,preview.days,springMonthlyAvg);
+    const r1=runChangeoverMin(sh1,dates,capacity,groupSpec,coilerMin);
+    const r2=runChangeoverMin(sh2,dates,capacity,groupSpec,coilerMin);
+    const m1=computeScenarioMetrics(r1,sh1);
+    const m2=computeScenarioMetrics(r2,sh2);
+    return{
+      dates,
+      cur:{days:safetyDays==null?7:safetyDays,...m1,dailyAvg:m1.totalProduced/Math.max(1,dates.length),exceed:countCapacityExceedDays(r1.schedule,dates,capacity),schedule:r1.schedule},
+      next:{days:preview.days,...m2,dailyAvg:m2.totalProduced/Math.max(1,dates.length),exceed:countCapacityExceedDays(r2.schedule,dates,capacity),schedule:r2.schedule},
+    };
+  },[preview,liveInv,plan,codes,sd,springMonthlyAvg,safetyDays,capacity,groupSpec,coilerMin]);
   const downloadInventoryTemplate=()=>{
     const wb=XLSX.utils.book_new();
     const data=[['반제품코드','반제품명','현재고']];
@@ -1228,9 +1654,8 @@ function Inv({inv,setInv,save,capacity,setCapacity,sd,codes,groups}){
     XLSX.utils.book_append_sheet(wb,ws,'초기재고');
     XLSX.writeFile(wb,'스프링_초기재고_양식.xlsx');
   };
-  const[capaEdit,setCapaEdit]=useState(false);
-  const[capaInput,setCapaInput]=useState(String(capacity||260));
   const[gf,setGf]=useState('전체');
+  const[editVals,setEditVals]=useState({});   // 행별 편집 중인 값 (blur 시 commit)
   const fl=gf==='전체'?codes:codes.filter(c=>sd[c].g===gf);
   const handleExcelUpload=()=>{
     const i=document.createElement('input');i.type='file';i.accept='.xls,.xlsx';
@@ -1259,7 +1684,14 @@ function Inv({inv,setInv,save,capacity,setCapacity,sd,codes,groups}){
               }
             }
           }
-          if(cnt>0){setInv(ni);LS('baseInv',ni);alert(cnt+'종의 초기 재고가 반영되었습니다.')}
+          const applyReset=()=>{
+            if(!confirm(cnt+'종의 초기 재고를 새 값으로 재세팅합니다.\n누적된 거래 내역도 같이 초기화됩니다.\n\n진행하시겠습니까?'))return false;
+            setInv(ni);LS('baseInv',ni);
+            setTxns([]);LS('txns',[]);
+            alert(cnt+'종의 초기 재고가 반영되고, 거래 내역이 초기화되었습니다.');
+            return true;
+          };
+          if(cnt>0){applyReset()}
           else{
             for(let ri=4;ri<rows.length;ri++){
               const rw=rows[ri];if(!rw||!rw[2])continue;
@@ -1269,8 +1701,27 @@ function Inv({inv,setInv,save,capacity,setCapacity,sd,codes,groups}){
               const match=codes.find(c=>sd[c].n===name);
               if(match){ni[match]=val;cnt++}
             }
-            if(cnt>0){setInv(ni);LS('baseInv',ni);alert(cnt+'종의 초기 재고가 반영되었습니다.')}
-            else alert('반제품코드 또는 반제품명을 인식할 수 없습니다.')
+            if(cnt>0){applyReset()}
+            else{
+              // 더 친절한 진단: 매핑 미등록 vs 코드 미일치 vs 형식 문제 구분
+              if(Object.keys(sd).length===0){
+                alert('인식 실패: 매핑이 등록되지 않았습니다.\n\n[매핑 관리] 탭에서 매핑 양식을 먼저 업로드한 뒤,\n초기 재고 양식을 업로드해 주세요.');
+              }else{
+                let unmatched=0;const unmatchedSample=[];
+                for(let ri2=1;ri2<rows.length;ri2++){
+                  const rw2=rows[ri2]||[];
+                  for(let ci2=0;ci2<rw2.length;ci2++){
+                    const cell2=String(rw2[ci2]||'');
+                    if(cell2.match(/^[A-Z]{4}\d{6}-R000$/)){
+                      if(!sd[cell2]){unmatched++;if(unmatchedSample.length<3)unmatchedSample.push(cell2);}
+                      break;
+                    }
+                  }
+                }
+                if(unmatched>0)alert(`인식 실패: 양식의 ${unmatched}개 코드가 현재 매핑에 등록되지 않았습니다.\n[매핑 관리] 탭에서 매핑을 다시 확인해 주세요.\n\n예시: ${unmatchedSample.join(', ')}`);
+                else alert('반제품코드 또는 반제품명을 인식할 수 없습니다.\n양식 형식(반제품코드 | 반제품명 | 현재고)을 확인해 주세요.');
+              }
+            }
           }
         }catch(er){alert('파일 읽기 오류: '+er.message)}
       };r.readAsArrayBuffer(f);
@@ -1278,38 +1729,121 @@ function Inv({inv,setInv,save,capacity,setCapacity,sd,codes,groups}){
   };
   return(<div>
     <div className="flex items-center justify-between mb-4">
-      <div><h2 className="text-sm font-medium">초기 재고 설정</h2><p className="text-xs text-gray-500 mt-0.5">37종 스프링 품목별 현재고를 입력하세요</p></div>
+      <div><h2 className="text-sm font-medium">초기 재고 / 현재고 조정</h2><p className="text-xs text-gray-500 mt-0.5">월말 재실사는 [엑셀에서 불러오기], 평소 ±조정은 아래 표 직접 수정 (수정 시 자동 저장)</p></div>
       <div className="flex gap-2">
         <button onClick={downloadInventoryTemplate} className="px-3 py-2 text-xs font-medium text-gray-500 bg-gray-100 rounded-lg hover:bg-gray-200">↓ 양식 다운로드</button>
         <button onClick={handleExcelUpload} className="px-3 py-2 text-xs font-medium text-blue-600 bg-blue-50 rounded-lg hover:bg-blue-100 border border-blue-200">엑셀에서 불러오기</button>
-        <button onClick={save} className="px-4 py-2 bg-red-600 text-white text-xs font-medium rounded-lg hover:bg-red-700">재고 저장</button>
       </div>
     </div>
     <div className="border border-gray-200 rounded-lg p-4 mb-4 bg-[#FFFFFF]">
-      <div className="flex items-center justify-between">
+      <div className="flex items-baseline gap-3 mb-3">
+        <h3 className="text-sm font-medium">시뮬 설정</h3>
+        <span className="text-xs text-gray-400">자동 계획에 사용 · 변경 즉시 저장</span>
+      </div>
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <div>
-          <div className="text-xs font-medium text-gray-700">일일 생산 Capacity</div>
-          <div className="text-xs text-gray-400 mt-0.5">계획 모드의 초과 경고 기준값으로 사용됩니다</div>
+          <div className="text-xs text-gray-500 mb-1">1라인 capacity</div>
+          <div className="flex items-center gap-2">
+            <input type="number" min="1" value={(capacity&&capacity.B!=null)?capacity.B:130} onChange={e=>{const v=parseInt(e.target.value);if(!isNaN(v)&&v>=1)setCapacity({A:(capacity&&capacity.A!=null)?capacity.A:130,B:v})}}
+              className="w-20 px-2 py-1.5 border border-blue-200 rounded-lg text-sm font-bold text-blue-600 text-center focus:outline-none focus:ring-2 focus:ring-blue-300"/>
+            <span className="text-xs text-gray-400">개/일</span>
+          </div>
         </div>
-        {!capaEdit
-          ?<div className="flex items-center gap-3">
-              <span className="text-sm font-bold text-blue-600">{capacity}개/일</span>
-              <button onClick={()=>{setCapaInput(String(capacity));setCapaEdit(true)}} className="text-xs px-3 py-1.5 border border-blue-200 text-blue-600 rounded-lg hover:bg-blue-50">수정</button>
-            </div>
-          :<div className="flex items-center gap-2">
-              <input type="number" min="1" value={capaInput} onChange={e=>setCapaInput(e.target.value)}
-                className="w-24 text-right px-2 py-1.5 border border-blue-300 rounded-lg text-sm font-bold text-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-300"/>
-              <span className="text-xs text-gray-400">개/일</span>
-              <button onClick={()=>{
-                const v=parseInt(capaInput);
-                if(!v||v<1){alert('1 이상의 값을 입력하세요');return}
-                setCapacity(v);setCapaEdit(false);
-              }} className="text-xs px-3 py-1.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700">저장</button>
-              <button onClick={()=>setCapaEdit(false)} className="text-xs px-3 py-1.5 border border-gray-200 text-gray-500 rounded-lg hover:bg-gray-100">취소</button>
-            </div>
-        }
+        <div>
+          <div className="text-xs text-gray-500 mb-1">2라인 capacity</div>
+          <div className="flex items-center gap-2">
+            <input type="number" min="1" value={(capacity&&capacity.A!=null)?capacity.A:130} onChange={e=>{const v=parseInt(e.target.value);if(!isNaN(v)&&v>=1)setCapacity({A:v,B:(capacity&&capacity.B!=null)?capacity.B:130})}}
+              className="w-20 px-2 py-1.5 border border-blue-200 rounded-lg text-sm font-bold text-blue-600 text-center focus:outline-none focus:ring-2 focus:ring-blue-300"/>
+            <span className="text-xs text-gray-400">개/일</span>
+          </div>
+        </div>
+        <div>
+          <div className="text-xs text-gray-500 mb-1">안전재고 일수</div>
+          <div className="flex items-center gap-2">
+            <input type="number" min="0" max="30" value={safetyDays==null?7:safetyDays} onChange={e=>{const v=parseInt(e.target.value);if(!isNaN(v)&&v>=0&&setSafetyDays)setSafetyDays(v)}}
+              className="w-20 px-2 py-1.5 border border-blue-200 rounded-lg text-sm font-bold text-blue-600 text-center focus:outline-none focus:ring-2 focus:ring-blue-300"/>
+            <span className="text-xs text-gray-400">일</span>
+          </div>
+        </div>
+        <div>
+          <div className="text-xs text-gray-500 mb-1">코일러 안정화 시간</div>
+          <div className="flex items-center gap-2">
+            <input type="number" min="0" max="600" value={coilerMin==null?60:coilerMin} onChange={e=>{const v=parseInt(e.target.value);if(!isNaN(v)&&v>=0&&setCoilerMin)setCoilerMin(v)}}
+              className="w-20 px-2 py-1.5 border border-blue-200 rounded-lg text-sm font-bold text-blue-600 text-center focus:outline-none focus:ring-2 focus:ring-blue-300"/>
+            <span className="text-xs text-gray-400">분/개</span>
+          </div>
+        </div>
+      </div>
+      <div className="flex items-center justify-between mt-3 pt-3 border-t border-gray-100">
+        <div className="text-xs text-gray-400 leading-relaxed flex-1 mr-3">
+          ※ <span className="font-medium">안전재고</span>: 항상 N일치 재고 유지 + 한 번 만들 때 N일치까지 채움 ·
+          <span className="font-medium ml-1">코일러 안정화</span>: 슬로우 1조닝↔7조닝 2개, 그 외 페어 3개 변경 기준
+        </div>
+        <button onClick={()=>setPreview({days:safetyDays==null?7:safetyDays})}
+          className="text-xs px-3 py-1.5 border border-blue-200 text-blue-600 rounded-lg hover:bg-blue-50 whitespace-nowrap">▼ 안전재고 변경 미리보기</button>
       </div>
     </div>
+    {preview&&<div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={()=>setPreview(null)}>
+      <div className="bg-white rounded-xl shadow-2xl p-6 max-w-3xl w-full max-h-[90vh] overflow-auto" onClick={e=>e.stopPropagation()}>
+        <div className="flex items-baseline justify-between mb-1">
+          <h3 className="text-base font-bold">안전재고 일수 변경 미리보기</h3>
+          <button onClick={()=>setPreview(null)} className="text-gray-400 hover:text-gray-600 text-lg">✕</button>
+        </div>
+        <p className="text-xs text-gray-500 mb-4 leading-relaxed">슬라이더로 안전재고 일수를 조정하면 일 생산량/교체 횟수/capacity 초과일이 어떻게 바뀌는지 확인하고 적용할 수 있습니다.<br/>(향후 21일 기간, '교체 최소' 시나리오 기준)</p>
+        <div className="bg-gray-50 rounded-lg p-4 mb-4">
+          <div className="flex items-center gap-3 mb-3">
+            <span className="text-xs text-gray-500 w-16">안전재고:</span>
+            <input type="range" min="0" max="14" step="1" value={preview.days} onChange={e=>setPreview({days:parseInt(e.target.value)})} className="flex-1"/>
+            <span className="text-sm font-bold w-16 text-right text-blue-600">{preview.days}일</span>
+          </div>
+          {!springMonthlyAvg||Object.keys(springMonthlyAvg||{}).length===0
+            ?<div className="text-xs text-amber-600 bg-amber-50 px-3 py-2 rounded">⚠ 제품 출고량(ERP 자재소요현황)이 업로드되지 않아 시뮬을 수행할 수 없습니다.</div>
+            :previewMetrics?<div className="grid grid-cols-2 gap-3 text-xs">
+              {[['cur','현재','text-gray-700 border-gray-200 bg-white'],['next','변경','text-blue-700 border-blue-300 bg-blue-50']].map(([key,label,cls])=>{
+                const m=previewMetrics[key];
+                return(<div key={key} className={`border rounded-lg p-3 ${cls}`}>
+                  <div className="text-xs font-medium mb-2">{label} ({m.days}일)</div>
+                  <div className="space-y-1">
+                    <div className="flex justify-between"><span className="text-gray-500">일평균 생산</span><span className="font-bold">{m.dailyAvg.toFixed(0)}개</span></div>
+                    <div className="flex justify-between"><span className="text-gray-500">교체 횟수</span><span className="font-bold">{m.changeoverCount}회</span></div>
+                    <div className="flex justify-between"><span className="text-gray-500">교체 시간</span><span className="font-bold">{m.changeoverMin}분</span></div>
+                    <div className="flex justify-between"><span className="text-gray-500">납기 준수율</span><span className="font-bold">{(m.onTimeRate*100).toFixed(0)}%</span></div>
+                    <div className="flex justify-between"><span className="text-gray-500">capacity 초과일</span><span className={`font-bold ${m.exceed>0?'text-red-600':''}`}>{m.exceed}일{m.exceed>0?' ⚠':''}</span></div>
+                    <div className="flex justify-between"><span className="text-gray-500">총 생산량</span><span className="font-bold">{m.totalProduced.toLocaleString()}개</span></div>
+                  </div>
+                </div>);
+              })}
+            </div>:<div className="text-xs text-gray-400">계산 중...</div>}
+        </div>
+        {previewMetrics&&<div className="border border-gray-200 rounded-lg p-3 mb-4">
+          <div className="text-xs text-gray-500 mb-2">일자별 합계 생산량 비교 (라인 A+B 합산)</div>
+          {[['cur','현재','#9ca3af'],['next','변경','#2563eb']].map(([key,label,color])=>{
+            const m=previewMetrics[key];
+            const dayQtys=previewMetrics.dates.map(d=>{
+              let t=0;['A','B'].forEach(line=>m.schedule[line][d].items.forEach(it=>{t+=it.qty}));
+              return t;
+            });
+            const totCap=totalCapacity(capacity);
+            const max=Math.max(...dayQtys,totCap,1);
+            return(<div key={key} className="mb-2 last:mb-0">
+              <div className="text-xs text-gray-400 mb-0.5">{label}</div>
+              <div className="flex items-end gap-px h-8">
+                {dayQtys.map((q,i)=>(
+                  <div key={i} className="flex-1 relative" title={`${previewMetrics.dates[i]} ${q}개`}>
+                    <div style={{height:`${(q/max)*100}%`,background:q>totCap?'#ef4444':color,minHeight:q>0?'2px':'0'}}/>
+                  </div>
+                ))}
+              </div>
+            </div>);
+          })}
+          <div className="text-xs text-gray-400 mt-1">capacity 합계 {totalCapacity(capacity)}개 (2라인 {(capacity&&capacity.A!=null)?capacity.A:'-'} + 1라인 {(capacity&&capacity.B!=null)?capacity.B:'-'}) 초과 시 빨간색</div>
+        </div>}
+        <div className="flex gap-2">
+          <button onClick={()=>{if(setSafetyDays)setSafetyDays(preview.days);setPreview(null)}} className="flex-1 py-2 text-xs bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium">{preview.days}일로 적용</button>
+          <button onClick={()=>setPreview(null)} className="px-4 py-2 text-xs border border-gray-200 text-gray-500 rounded-lg hover:bg-gray-50">닫기</button>
+        </div>
+      </div>
+    </div>}
     <div className="mb-3"><select value={gf} onChange={e=>setGf(e.target.value)} className="text-xs px-3 py-1.5 border border-gray-200 rounded-lg bg-[#FFFFFF] focus:outline-none focus:ring-2 focus:ring-blue-200 cursor-pointer"><option value="전체">전체 그룹 (37종)</option>{groups.map(g=><option key={g} value={g}>{g} ({codes.filter(c=>sd[c].g===g).length}종)</option>)}</select></div>
     <div className="border border-gray-200 rounded-lg overflow-auto" style={{maxHeight:500}}>
       <table className="w-full text-xs"><thead className="sticky top-0"><tr className="bg-gray-50 border-b border-gray-200">
@@ -1323,8 +1857,30 @@ function Inv({inv,setInv,save,capacity,setCapacity,sd,codes,groups}){
           <td className="px-3 py-1.5 font-medium">{sd[c].n}</td>
           <td className="px-2 py-1.5"><Tag g={sd[c].g}/></td>
           <td className="px-3 py-1.5 text-right">
-            <input type="number" min="0" value={inv[c]||''} placeholder="0"
-              onChange={e=>setInv(p=>({...p,[c]:parseInt(e.target.value)||0}))}
+            <input type="number" min="0"
+              value={editVals[c]!==undefined?editVals[c]:(liveInv[c]||'')}
+              placeholder="0"
+              onChange={e=>setEditVals(p=>({...p,[c]:e.target.value}))}
+              onBlur={()=>{
+                const raw=editVals[c];
+                if(raw===undefined)return;
+                const trimmed=String(raw).trim();
+                const clearEdit=()=>setEditVals(p=>{const np={...p};delete np[c];return np});
+                if(trimmed===''){clearEdit();return}
+                const newVal=parseInt(trimmed);
+                if(isNaN(newVal)||newVal<0){clearEdit();return}
+                const oldVal=liveInv[c]||0;
+                const delta=newVal-oldVal;
+                if(delta!==0)addTxn('adj_'+c+'_'+Date.now(),{[c]:delta});
+                clearEdit();
+              }}
+              onKeyDown={e=>{
+                if(e.key==='Enter')e.target.blur();
+                else if(e.key==='Escape'){
+                  setEditVals(p=>{const np={...p};delete np[c];return np});
+                  e.target.blur();
+                }
+              }}
               className="w-20 text-right px-2 py-1 border border-blue-200 rounded bg-blue-50 text-blue-700 font-medium focus:outline-none focus:ring-2 focus:ring-blue-300 text-xs"/>
           </td>
         </tr>
@@ -1377,6 +1933,54 @@ function MapMgr({map,setMap,onUp,sd,hist}){
   </div>);
 }
 
+function GroupSpecMgr({groupSpec,setGroupSpec}){
+  const update=(g,field,value)=>{
+    const v=value===''?null:value;
+    const next={...groupSpec,[g]:{...(groupSpec[g]||{}),[field]:v}};
+    setGroupSpec(next);LS('groupSpec',next);
+  };
+  const missing=getMissingSpecGroups(groupSpec);
+  return(<div>
+    <div className="bg-white rounded-lg border border-gray-200 p-4 mb-4">
+      <div className="flex items-baseline gap-3 mb-2">
+        <h3 className="text-sm font-medium">그룹 스펙</h3>
+        <span className="text-xs text-gray-400">교체시간 계산용 강선 / 높이 / 부직포 (변경 시 자동 저장)</span>
+      </div>
+      <p className="text-xs text-gray-500 leading-relaxed">두 그룹의 강선·높이·부직포 값이 모두 같으면 교체시간 0분, 다르면 변경 항목 수에 따라 30~120분이 산출됩니다.<br/>같은 값을 가진 그룹은 자동 계획에서 연속 생산되어 교체가 발생하지 않습니다.</p>
+      {missing.length>0&&<div className="mt-3 px-3 py-2 bg-amber-50 border border-amber-200 rounded text-xs text-amber-700">
+        ⚠ 미입력 {missing.length}개 그룹: {missing.map(m=>`${m.group}(${m.fields.join('·')})`).join(', ')}
+      </div>}
+    </div>
+    <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+      <table className="w-full text-xs">
+        <thead><tr className="bg-gray-50 border-b border-gray-200">
+          <th className="text-left px-3 py-2 font-medium text-gray-500 w-32">그룹</th>
+          {['wire','height','fabric'].map(f=><th key={f} className="text-left px-3 py-2 font-medium text-gray-500">{SPEC_LABEL[f]}</th>)}
+        </tr></thead>
+        <tbody>
+          {GROUP_LIST.map(g=>{
+            const s=groupSpec[g]||{};
+            const cell=(field)=>{
+              const empty=s[field]==null||s[field]==='';
+              return <select value={s[field]==null?'':s[field]} onChange={e=>update(g,field,e.target.value)}
+                className={`w-full px-2 py-1 border rounded text-xs cursor-pointer ${empty?'border-amber-300 bg-amber-50 text-amber-700':'border-gray-200 bg-white'} focus:outline-none focus:ring-2 focus:ring-blue-200`}>
+                <option value="">- 선택 -</option>
+                {SPEC_OPTIONS[field].map(opt=><option key={opt} value={opt}>{opt}</option>)}
+              </select>;
+            };
+            return(<tr key={g} className="border-b border-gray-100 last:border-0">
+              <td className="px-3 py-2"><Tag g={g}/></td>
+              <td className="px-2 py-2">{cell('wire')}</td>
+              <td className="px-2 py-2">{cell('height')}</td>
+              <td className="px-2 py-2">{cell('fabric')}</td>
+            </tr>);
+          })}
+        </tbody>
+      </table>
+    </div>
+  </div>);
+}
+
 function App(){
   const[user,setUser]=useState(null);
   const[tab,setTab]=useState('dashboard');
@@ -1386,12 +1990,43 @@ function App(){
   const[hist,setHist]=useState(()=>LS('hist')||[]);
   const[plan,setPlan]=useState(()=>LS('plan')||{});
   const[mp,setMp]=useState(()=>LS('mp')||{});
-  const[capacity,setCapacity]=useState(()=>LS('capacity')||260);
+  const[capacity,setCapacity]=useState(()=>normalizeCapacity(LS('capacity')));
   const[toast,setToast]=useState(null);
   const[logs,setLogs]=useState(()=>LS('logs')||[]);
   const[fbLoaded,setFbLoaded]=useState(false);
   const[completedCards,setCompletedCards]=useState(()=>LS('completedCards')||{});
   const[carryLog,setCarryLog]=useState(()=>LS('carryLog')||[]);
+  const[safetyDays,setSafetyDays]=useState(()=>LS('safetyDays')||7);
+  const[productOutbound,setProductOutbound]=useState(()=>LS('productOutbound')||{});
+  const[groupSpec,setGroupSpec]=useState(()=>LS('groupSpec')||GROUP_SPEC_DEFAULT);
+  const[coilerMin,setCoilerMin]=useState(()=>{const v=LS('coilerMin');return v==null?60:v});
+  const[mpHistory,setMpHistory]=useState(()=>LS('mpHistory')||[]);
+  const[holidays,setHolidays]=useState(()=>LS('holidays')||[]); // [{date:'YYYY-MM-DD', memo:''}]
+  // 모바일 감지 (max-width: 767px). 모바일이면 admin이라도 viewer 동일 UI로 강제 — 편집은 PC에서만
+  const[isMobile,setIsMobile]=useState(()=>typeof window!=='undefined'&&window.matchMedia&&window.matchMedia('(max-width:767px)').matches);
+  useEffect(()=>{
+    if(typeof window==='undefined'||!window.matchMedia)return;
+    const mq=window.matchMedia('(max-width:767px)');
+    const h=e=>setIsMobile(e.matches);
+    if(mq.addEventListener)mq.addEventListener('change',h);
+    else mq.addListener(h);
+    return()=>{if(mq.removeEventListener)mq.removeEventListener('change',h);else mq.removeListener(h)};
+  },[]);
+  // 스냅샷 저장: 큰 액션 직전에 mp/lineOverride 상태를 보관 (최대 20개)
+  const pushMpSnapshot=(label,type)=>{
+    const snap={
+      ts:new Date().toISOString(),
+      label:label||'스냅샷',
+      type:type||'generic',
+      mp:JSON.parse(JSON.stringify(LS('mp')||{})),
+      lineOverride:JSON.parse(JSON.stringify(LS('lineOverride')||{})),
+    };
+    setMpHistory(prev=>{
+      const next=[snap,...(prev||[])].slice(0,20);
+      LS('mpHistory',next);
+      return next;
+    });
+  };
   const toggleComplete=(code,date,eq,qty)=>{const k=`${code}_${date}_${eq}`;const n={...completedCards};if(n[k])delete n[k];else n[k]={qty:qty||0};setCompletedCards(n);LS('completedCards',n);};
 
   // Firebase 초기 동기화
@@ -1405,14 +2040,20 @@ function App(){
       setHist(LS('hist')||[]);
       setPlan(LS('plan')||{});
       setMp(LS('mp')||{});
-      setCapacity(LS('capacity')||260);
+      setCapacity(normalizeCapacity(LS('capacity')));
       setCompletedCards(LS('completedCards')||{});
       setCarryLog(LS('carryLog')||[]);
+      setSafetyDays(LS('safetyDays')||7);
+      setProductOutbound(LS('productOutbound')||{});
+      setGroupSpec(LS('groupSpec')||GROUP_SPEC_DEFAULT);
+      {const v=LS('coilerMin');setCoilerMin(v==null?60:v)}
+      setMpHistory(LS('mpHistory')||[]);
+      setHolidays(LS('holidays')||[]);
       setFbLoaded(true);
       // 실시간 리스너
       if(window.__fb){
         window.__fb.listen(data=>{
-          ['baseInv','txns','map','hist','plan','mp','capacity','completedCards','carryLog','visitors'].forEach(k=>{
+          ['baseInv','txns','map','hist','plan','mp','capacity','completedCards','carryLog','visitors','safetyDays','productOutbound','groupSpec','coilerMin','mpHistory','holidays'].forEach(k=>{
             if(data[k]!==undefined){
               try{localStorage.setItem('si_'+k,typeof data[k]==='string'?data[k]:JSON.stringify(data[k]))}catch{}
             }
@@ -1423,9 +2064,15 @@ function App(){
           setHist(LS('hist')||[]);
           setPlan(LS('plan')||{});
           setMp(LS('mp')||{});
-          setCapacity(LS('capacity')||260);
+          setCapacity(normalizeCapacity(LS('capacity')));
           setCompletedCards(LS('completedCards')||{});
           setCarryLog(LS('carryLog')||[]);
+          setSafetyDays(LS('safetyDays')||7);
+          setProductOutbound(LS('productOutbound')||{});
+          setGroupSpec(LS('groupSpec')||GROUP_SPEC_DEFAULT);
+          {const v=LS('coilerMin');setCoilerMin(v==null?60:v)}
+          setMpHistory(LS('mpHistory')||[]);
+          setHolidays(LS('holidays')||[]);
         });
       }
     };
@@ -1434,6 +2081,17 @@ function App(){
   },[]);
 
   const {sd,codes,groups}=useMemo(()=>buildCodes(buildSD(map)),[map]);
+
+  // 스프링 월평균 소비량 (= 그 스프링을 쓰는 모든 제품의 월평균 출고량 합)
+  const springMonthlyAvg=useMemo(()=>{
+    const result={};
+    Object.entries(map).forEach(([productCode,v])=>{
+      if(!v||!v.sc)return;
+      const monthly=productOutbound[productCode]||0;
+      if(monthly>0)result[v.sc]=(result[v.sc]||0)+monthly;
+    });
+    return result;
+  },[map,productOutbound]);
 
   const inv=useMemo(()=>{
     const result={...baseInv};
@@ -1451,7 +2109,6 @@ function App(){
     const newLogs=[{ts,m,t},...logs].slice(0,100);
     setLogs(newLogs);LS('logs',newLogs);
   };
-  const saveBaseInv=(ni)=>{setBaseInv(ni);LS('baseInv',ni);show('초기 재고가 저장되었습니다.')};
 
   const addTxn=(txId,items)=>{const nt=[...txns,{id:txId,items}];setTxns(nt);LS('txns',nt)};
   const removeTxn=(txId)=>{const nt=txns.filter(t=>t.id!==txId);setTxns(nt);LS('txns',nt)};
@@ -1622,6 +2279,35 @@ function App(){
           if(um.length>0)nh.unmapped=[...new Set(um)];
           const msg=`포장계획 반영: ${cnt}건 (기존 출고예정 교체)${um.length>0?`, 매핑 누락 ${nh.unmapped.length}건`:''}`;
           show(msg,um.length>0?'warn':'ok');
+        } else if(ft==='erp'){
+          // ERP 자재소요현황: 제품 월평균 출고량 추출 (헤더 텍스트로 동적 검색)
+          if(Object.keys(map).length===0){show('매핑이 등록되지 않았습니다. 매핑 관리에서 먼저 업로드하세요.','err');return}
+          const codeIdx=hd.findIndex(x=>String(x||'').includes('품목코드'));
+          const avgIdx=hd.findIndex(x=>String(x||'').includes('3개월'));
+          if(codeIdx<0||avgIdx<0){show('ERP 파일 헤더 인식 실패 (품목코드 또는 3개월 평균매출)','err');return}
+          // 멀티헤더 처리: row 1 첫 셀이 코드 형태면 데이터 시작이 row 1, 아니면 row 2
+          const probe=rows[1]&&rows[1][codeIdx]!=null?String(rows[1][codeIdx]).trim():'';
+          const startRow=/^[A-Za-z0-9]/.test(probe)?1:2;
+          const newOutbound={};
+          let cnt=0,um=[],zero=0;
+          for(let i=startRow;i<rows.length;i++){
+            const rw=rows[i];
+            if(!rw||rw[codeIdx]==null)continue;
+            const productCode=String(rw[codeIdx]).trim();
+            if(!productCode||productCode.includes('Total')||productCode.includes('Sub'))continue;
+            const avg3m=parseFloat(rw[avgIdx])||0;
+            if(avg3m===0){zero++;continue}
+            if(!map[productCode]){um.push(productCode);continue}
+            const monthly=avg3m/3;
+            newOutbound[productCode]=(newOutbound[productCode]||0)+monthly;
+            cnt++;
+          }
+          setProductOutbound(newOutbound);LS('productOutbound',newOutbound);
+          nh.outboundData=newOutbound;
+          let msg=`ERP 출고량 ${cnt}건 등록`;
+          if(um.length>0){nh.unmapped=[...new Set(um)];msg+=`, 매핑 누락 ${nh.unmapped.length}건`;}
+          if(zero>0)msg+=`, 비활성(0) ${zero}건 제외`;
+          show(msg,um.length>0?'warn':'ok');
         }
         // pkgplan이면 기존 pkgplan 이력 active 해제
         const updHist=hist.map(h=>h.t==='pkgplan'?{...h,active:false}:h);
@@ -1655,28 +2341,34 @@ function App(){
     </div>
   );
   if(!user)return <Login onLogin={setUser}/>;
-  const isA=user.role==='admin';
-  const tabs=isA?[['dashboard','대시보드'],['planning','계획 모드'],['mapping','매핑 관리'],['inventory','초기 재고'],['history','업로드 이력']]:[['dashboard','재고 현황'],['planning','계획 모드']];
+  // 모바일이면 admin이라도 isA=false로 처리 → 자동으로 편집 UI/모달/admin 탭이 모두 비활성화됨
+  const isAdminAccount=user.role==='admin';
+  const isA=isAdminAccount&&!isMobile;
+  const tabs=isA?[['dashboard','대시보드'],['planning','계획 모드'],['mapping','매핑 관리'],['groupSpec','그룹 스펙'],['inventory','초기 재고'],['history','업로드 이력']]:[['dashboard','재고 현황'],['planning','계획 모드']];
 
   return(
     <div className="min-h-screen bg-gray-50">
       {toast&&<div onClick={()=>setToast(null)} className={`fixed top-4 right-4 z-50 px-4 py-2.5 rounded-lg shadow-lg text-xs font-medium cursor-pointer max-w-sm ${toast.t==='ok'?'bg-emerald-600 text-white':toast.t==='warn'?'bg-amber-500 text-white':'bg-red-500 text-white'}`}>{toast.m}<span className="ml-2 opacity-60">✕</span></div>}
-      <div className="max-w-7xl mx-auto px-6 py-4">
-        <div className="flex items-center justify-between mb-5 pb-3 border-b border-gray-200">
-          <div className="flex items-center gap-3">
+      <div className="max-w-7xl mx-auto px-3 md:px-6 py-3 md:py-4">
+        <div className="flex flex-wrap items-center justify-between gap-2 mb-3 md:mb-5 pb-3 border-b border-gray-200">
+          <div className="flex items-center gap-2 md:gap-3 flex-wrap">
             <div><div className="text-xs font-bold tracking-widest">FURSYS GROUP</div><div className="text-lg font-bold text-red-600" style={{fontFamily:'Georgia,serif'}}>iloom</div></div>
-            <div className="ml-4"><div className="text-base font-medium">스프링 재고관리</div><div className="text-xs text-gray-400">{new Date().toLocaleDateString('ko-KR',{year:'numeric',month:'long',day:'numeric'})} 기준</div></div>
-            <span className={`text-xs px-2.5 py-1 rounded-md ml-2 ${isA?'bg-blue-50 text-blue-600':'bg-gray-100 text-gray-500'}`}>{user.name} · {isA?'관리자':'보기 전용'}</span>
+            <div className="ml-2 md:ml-4"><div className="text-sm md:text-base font-medium">스프링 재고관리</div><div className="text-xs text-gray-400">{new Date().toLocaleDateString('ko-KR',{year:'numeric',month:'long',day:'numeric'})} 기준</div></div>
+            <span className={`text-xs px-2.5 py-1 rounded-md ${isA?'bg-blue-50 text-blue-600':'bg-gray-100 text-gray-500'}`}>{user.name} · {isA?'관리자':isMobile&&isAdminAccount?'모바일 조회':'보기 전용'}</span>
           </div>
-          <div className="flex items-center gap-1">
+          <div className="flex items-center gap-1 flex-wrap">
             {tabs.map(([k,l])=><button key={k} onClick={()=>setTab(k)} className={`text-xs px-3 py-1.5 rounded-md ${tab===k?'bg-gray-900 text-white font-medium':'text-gray-500 hover:bg-gray-100'}`}>{l}</button>)}
-            <button onClick={()=>setUser(null)} className="text-xs px-3 py-1.5 text-gray-400 hover:text-gray-600 ml-2">로그아웃</button>
+            <button onClick={()=>setUser(null)} className="text-xs px-3 py-1.5 text-gray-400 hover:text-gray-600 ml-1 md:ml-2">로그아웃</button>
           </div>
         </div>
+        {isMobile&&isAdminAccount&&<div className="mb-3 px-3 py-2 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-700 leading-relaxed">
+          📱 모바일은 <span className="font-medium">조회 전용</span>입니다. 편집·자동 계획·업로드는 PC에서 진행해주세요.
+        </div>}
         {tab==='dashboard'&&<Dash inv={inv} map={map} hist={hist} onUp={handleUp} isA={isA} plan={plan} mp={mp} sd={sd} codes={codes} groups={groups} completedCards={completedCards} carryLog={carryLog}/>}
-        {tab==='planning'&&<Plan inv={inv} plan={plan} mp={mp} setMp={setMp} isA={isA} capacity={capacity} setCapacity={c=>{setCapacity(c);LS('capacity',c);}} sd={sd} codes={codes} groups={groups} completedCards={completedCards} toggleComplete={toggleComplete} carryLog={carryLog} setCarryLog={setCarryLog}/>}
+        {tab==='planning'&&<Plan inv={inv} plan={plan} mp={mp} setMp={setMp} isA={isA} capacity={capacity} setCapacity={c=>{setCapacity(c);LS('capacity',c);}} sd={sd} codes={codes} groups={groups} completedCards={completedCards} toggleComplete={toggleComplete} carryLog={carryLog} setCarryLog={setCarryLog} groupSpec={groupSpec} setGroupSpec={setGroupSpec} safetyDays={safetyDays} setSafetyDays={d=>{setSafetyDays(d);LS('safetyDays',d);}} productOutbound={productOutbound} springMonthlyAvg={springMonthlyAvg} coilerMin={coilerMin} setCoilerMin={m=>{setCoilerMin(m);LS('coilerMin',m);}} goToTab={setTab} mpHistory={mpHistory} pushMpSnapshot={pushMpSnapshot} holidays={holidays} setHolidays={h=>{setHolidays(h);LS('holidays',h);}}/>}
         {tab==='mapping'&&isA&&<MapMgr map={map} setMap={setMap} onUp={handleMapUp} sd={sd} hist={hist}/>}
-        {tab==='inventory'&&isA&&<Inv inv={baseInv} setInv={setBaseInv} save={()=>saveBaseInv(baseInv)} capacity={capacity} setCapacity={c=>{setCapacity(c);LS('capacity',c);}} sd={sd} codes={codes} groups={groups}/>}
+        {tab==='groupSpec'&&isA&&<GroupSpecMgr groupSpec={groupSpec} setGroupSpec={setGroupSpec}/>}
+        {tab==='inventory'&&isA&&<Inv inv={baseInv} setInv={setBaseInv} setTxns={setTxns} addTxn={addTxn} capacity={capacity} setCapacity={c=>{setCapacity(c);LS('capacity',c);}} sd={sd} codes={codes} groups={groups} safetyDays={safetyDays} setSafetyDays={d=>{setSafetyDays(d);LS('safetyDays',d);}} coilerMin={coilerMin} setCoilerMin={m=>{setCoilerMin(m);LS('coilerMin',m);}} liveInv={inv} plan={plan} springMonthlyAvg={springMonthlyAvg} groupSpec={groupSpec}/>}
         {tab==='history'&&isA&&<div>
           <div className="grid grid-cols-2 gap-4 mb-4 items-start">
             <div className="border border-gray-200 rounded-lg p-4 bg-[#FFFFFF]">
@@ -1686,7 +2378,7 @@ function App(){
             <div>
               <div className="flex items-center justify-between mb-3">
                 <h2 className="text-sm font-medium">업로드 이력</h2>
-                <button onClick={()=>{if(!confirm('전체 업로드 이력을 초기화하시겠습니까?\n\n모든 실적 데이터, 출고예정, 가공 계획이 삭제되고\n재고가 초기 재고로 원복됩니다.'))return;setHist([]);LS('hist',[]);setTxns([]);LS('txns',[]);setPlan({});LS('plan',{});setMp({});LS('mp',{});show('전체 초기화 완료 (이력, 출고예정, 가공계획 모두 삭제)')}} className="text-xs text-gray-400 hover:text-gray-600">전체 초기화</button>
+                <button onClick={()=>{if(!confirm('전체 업로드 이력을 초기화하시겠습니까?\n\n모든 실적 데이터, 출고예정, 가공 계획이 삭제되고\n재고가 초기 재고로 원복됩니다.\n\n(현재 mp 상태는 자동 스냅샷에 저장되어 되돌리기 가능합니다)'))return;pushMpSnapshot('전체 초기화 직전','reset');setHist([]);LS('hist',[]);setTxns([]);LS('txns',[]);setPlan({});LS('plan',{});setMp({});LS('mp',{});show('전체 초기화 완료 (이력, 출고예정, 가공계획 모두 삭제)')}} className="text-xs text-gray-400 hover:text-gray-600">전체 초기화</button>
               </div>
               <div className="border border-gray-200 rounded-lg overflow-auto" style={{maxHeight:200}}>
                 <table className="w-full text-xs"><thead><tr className="bg-gray-50 border-b border-gray-200">
@@ -1701,7 +2393,7 @@ function App(){
                     hist.slice().reverse().map((h,ri)=><tr key={ri} className="border-b border-gray-100 hover:bg-gray-50">
                       <td className="px-3 py-2 text-gray-500">{h.d}</td>
                       <td className="px-3 py-2">{h.f}</td>
-                      <td className="px-3 py-2">{h.t==='pkg'?'포장 실적':h.t==='proc'?'가공 실적':h.t==='pkgplan'?'포장 계획':h.t==='weekplan'?'주간 생산계획':'기타'}</td>
+                      <td className="px-3 py-2">{h.t==='pkg'?'포장 실적':h.t==='proc'?'가공 실적':h.t==='pkgplan'?'포장 계획':h.t==='weekplan'?'주간 생산계획':h.t==='erp'?'ERP 자재소요':'기타'}</td>
                       <td className="px-3 py-2"><span className={`px-2 py-0.5 rounded ${h.s==='ok'?'bg-emerald-50 text-emerald-600':h.s==='dup'?'bg-amber-50 text-amber-600':'bg-red-50 text-red-600'}`}>{h.s==='ok'?'완료':h.s==='dup'?'중복':'오류'}</span></td>
                       <td className="text-center px-2 py-2">
                         {h.t==='pkgplan'
