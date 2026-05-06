@@ -208,24 +208,48 @@ function placeShortages(orderedShortages,dates,capacity,groupSpec,coilerMin,holi
     if(remainMin<=0)return 0;
     const minPerUnit=line==='A'?minPerUnitA:minPerUnitB;
     const canMake=Math.floor(remainMin/minPerUnit);
-    if(canMake<=0)return 0;
-    const make=Math.min(canMake,want);
+    // 10단위로 floor — 10 미만 capacity는 다음 날로 넘김 (마지막 fallback에서 잔업 처리)
+    const canMake10=Math.floor(canMake/10)*10;
+    if(canMake10<=0)return 0;
+    const make=Math.min(canMake10,want);
     day.items.push({code,group,qty:make,changeoverMin:co});
     day.usedMin+=co+make*minPerUnit;
     return make;
+  }
+  // 잔업 강제 배치: capacity 무시하고 dueDate 가까운 영업일에 한 번에 배치 (10단위 유지)
+  function placeOvertime(line,dueIdx,group,code,qty){
+    // dueIdx부터 거꾸로 가장 가까운 영업일 찾고, 없으면 앞으로 진행
+    let target=-1;
+    for(let di=dueIdx;di>=0;di--){if(isWorkday(dates[di])){target=di;break}}
+    if(target<0){for(let di=dueIdx+1;di<dates.length;di++){if(isWorkday(dates[di])){target=di;break}}}
+    if(target<0)return 0;
+    const day=schedule[line][dates[target]];
+    const lastIt=day.items.length>0?day.items[day.items.length-1]:null;
+    const lastG=lastIt?lastIt.group:getPrevGroup(line,target-1);
+    const isNewGroup=lastG!==group;
+    const co=isNewGroup?changeoverTime(lastG,group,groupSpec,coilerMin):0;
+    const minPerUnit=line==='A'?minPerUnitA:minPerUnitB;
+    day.items.push({code,group,qty,changeoverMin:co});
+    day.usedMin+=co+qty*minPerUnit;
+    return qty;
   }
   orderedShortages.forEach(s=>{
     const line=getLineForGroup(s.group,groupSpec);
     const dueIdx=dates.indexOf(s.dueDate);
     if(dueIdx<0){shortagesLeft.push({...s});return}
-    let remaining=s.qty;
-    // 1단계: dueDate-1일부터 거꾸로 (납기 보호)
+    // 생산 단위 10개씩 (부족량을 10의 배수로 올림)
+    let remaining=Math.ceil(s.qty/10)*10;
+    // 1단계: dueDate-1일부터 거꾸로 (납기 보호, 10단위 capacity 내에서)
     for(let di=Math.max(0,dueIdx-1);di>=0&&remaining>0;di--){
       remaining-=placeOnDay(line,di,s.group,s.code,remaining);
     }
-    // 2단계: 안 되면 dueDate 이후로 밀어냄 (납기 위반)
+    // 2단계: 안 되면 dueDate 이후로 밀어냄 (납기 위반, 10단위 capacity 내에서)
     for(let di=dueIdx;di<dates.length&&remaining>0;di++){
       remaining-=placeOnDay(line,di,s.group,s.code,remaining);
+    }
+    // 3단계: 모든 영업일이 10단위 capacity 부족이면 잔업으로 강제 배치 (capacity 초과 허용)
+    if(remaining>0){
+      remaining-=placeOvertime(line,dueIdx,s.group,s.code,remaining);
     }
     if(remaining>0)shortagesLeft.push({...s,qty:remaining});
   });
