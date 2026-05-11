@@ -480,6 +480,7 @@ function Dash({inv,map,hist,onUp,isA,plan,mp,sd,codes,groups,completedCards,carr
         ?<div className="flex flex-col gap-5">
           {mondayDays.map(({d,fmt,prod,carry,qA,qB})=>{
             const isWknd=d.getDay()===0||d.getDay()===6;
+            if(isWknd&&qA===0&&qB===0)return null;
             return <div key={fmt}>
               <div className="flex items-center gap-2 mb-2">
                 <span className={`text-xs font-semibold ${isWknd?'text-red-500':'text-gray-500'}`}>{fmt}</span>
