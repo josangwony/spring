@@ -442,32 +442,23 @@ function Dash({inv,map,hist,onUp,isA,plan,mp,sd,codes,groups,completedCards,carr
   const[shortOnly,setShortOnly]=useState(false);
   const tot=Object.values(inv).reduce((a,b)=>a+b,0);
   const warn=codes.filter(c=>{const q=inv[c]||0,o=(plan[c]||[]).reduce((a,b)=>a+b.qty,0),i=getMpCodeTotal(mp,c);return q+i-o<=0}).length;
-  // 어제 날짜 기준 생산완료 집계
+  // 날짜 키/포맷 헬퍼
+  const _dk=d=>`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+  const _dn=['일','월','화','수','목','금','토'];
+  const _df=d=>`${d.getMonth()+1}/${d.getDate()}(${_dn[d.getDay()]})`;
+  const _getProd=dateStr=>{const p={A:{},B:{}};Object.entries(completedCards||{}).forEach(([k,v])=>{if(!v)return;const line=k.slice(-1);if(line!=='A'&&line!=='B')return;const date=k.slice(-12,-2);if(date!==dateStr)return;const code=k.slice(0,-13);const qty=typeof v==='object'?v.qty||0:0;if(!p[line][code])p[line][code]=0;p[line][code]+=qty;});return p;};
+  const _getCarry=dateStr=>{const c={A:0,B:0};(carryLog||[]).filter(l=>l.fromDate===dateStr).forEach(l=>{if(l.line==='A')c.A+=l.qty;else if(l.line==='B')c.B+=l.qty;});return c;};
+  // 어제 날짜
   const yesterday=new Date();yesterday.setDate(yesterday.getDate()-1);
-  const yd=`${yesterday.getFullYear()}-${String(yesterday.getMonth()+1).padStart(2,'0')}-${String(yesterday.getDate()).padStart(2,'0')}`;
-  const ydDay=['일','월','화','수','목','금','토'][yesterday.getDay()];
-  const ydFmt=`${yesterday.getMonth()+1}/${yesterday.getDate()}(${ydDay})`;
-  // key: {code}_{YYYY-MM-DD}_{line} → 마지막 _로 line, 그 앞 10자로 date
-  const ydProduced={A:{},B:{}}; // {line: {springCode: qty}}
-  Object.entries(completedCards||{}).forEach(([k,v])=>{
-    if(!v)return;
-    const line=k.slice(-1); // 'A' or 'B'
-    if(line!=='A'&&line!=='B')return;
-    const date=k.slice(-12,-2); // YYYY-MM-DD
-    if(date!==yd)return;
-    const code=k.slice(0,-13); // springCode
-    const qty=typeof v==='object'?v.qty||0:0;
-    if(!ydProduced[line][code])ydProduced[line][code]=0;
-    ydProduced[line][code]+=qty;
-  });
+  const yd=_dk(yesterday);
+  const ydFmt=_df(yesterday);
+  const ydProduced=_getProd(yd);
   const ydQty={A:Object.values(ydProduced.A).reduce((a,b)=>a+b,0),B:Object.values(ydProduced.B).reduce((a,b)=>a+b,0)};
   const ydTotal=ydQty.A+ydQty.B;
-  // 어제 날짜 기준 이월량 집계 (fromDate가 어제인 것)
-  const ydCarry={A:0,B:0};
-  (carryLog||[]).filter(l=>l.fromDate===yd).forEach(l=>{
-    if(l.line==='A')ydCarry.A+=l.qty;
-    else if(l.line==='B')ydCarry.B+=l.qty;
-  });
+  const ydCarry=_getCarry(yd);
+  // 월요일이면 금/토/일 3일치 집계
+  const isMonday=new Date().getDay()===1;
+  const mondayDays=isMonday?[-3,-2,-1].map(off=>{const d=new Date();d.setDate(d.getDate()+off);const key=_dk(d);const prod=_getProd(key);const carry=_getCarry(key);const qA=Object.values(prod.A).reduce((a,b)=>a+b,0);const qB=Object.values(prod.B).reduce((a,b)=>a+b,0);return{d,fmt:_df(d),prod,carry,qA,qB,total:qA+qB};}):null;
   const flBase=flt==='전체'?codes:codes.filter(c=>sd[c].g===flt);
   const getVals=c=>{const q=inv[c]||0,o=(plan[c]||[]).reduce((a,b)=>a+b.qty,0),i=getMpCodeTotal(mp,c);return{q,o,i,av:q+i-o}};
   const flFiltered=shortOnly?flBase.filter(c=>getVals(c).av<=0):flBase;
@@ -483,63 +474,116 @@ function Dash({inv,map,hist,onUp,isA,plan,mp,sd,codes,groups,completedCards,carr
     </div>
     <div className="border border-gray-200 rounded-lg p-4 bg-[#FFFFFF] mb-5">
       <div className="flex items-center justify-between mb-3">
-        <h3 className="text-sm font-medium">{ydFmt} 생산 현황</h3>
-
+        <h3 className="text-sm font-medium">{isMonday?`${mondayDays[0].fmt}~${mondayDays[2].fmt} 생산 현황`:`${ydFmt} 생산 현황`}</h3>
       </div>
-      <div className="grid grid-cols-2 gap-4">
-        {[{line:'B',label:'1라인 (기타)',borderC:'#f97316',bg:'#fff7ed',tc:'#c2410c',mc:'#fb923c',qty:ydQty.B,carry:ydCarry.B,prod:ydProduced.B},
-          {line:'A',label:'2라인 (일룸/이브닝/키즈)',borderC:'#3b82f6',bg:'#eff6ff',tc:'#1d4ed8',mc:'#60a5fa',qty:ydQty.A,carry:ydCarry.A,prod:ydProduced.A}
-        ].map(({line,label,borderC,bg,tc,mc,qty,carry,prod})=>
-          <div key={line} style={{background:bg,borderRadius:12,padding:'16px 20px',border:`1.5px solid ${borderC}22`,animation:'fadeSlideUp 0.4s ease',position:'relative',overflow:'hidden'}}>
-            <div style={{position:'absolute',top:0,left:0,width:4,height:'100%',background:borderC,borderRadius:'12px 0 0 12px'}}/>
-            <div style={{fontSize:11,fontWeight:600,color:tc,marginBottom:6,letterSpacing:0.3}}>{label}</div>
-            <div style={{display:'flex',alignItems:'baseline',gap:8,marginBottom:12}}>
-              <span style={{fontSize:32,fontWeight:700,color:tc,lineHeight:1}}>{qty.toLocaleString()}</span>
-              <span style={{fontSize:12,color:mc}}>개</span>
-              {carry>0&&<span style={{fontSize:10,color:'white',background:'#ef4444',borderRadius:4,padding:'3px 8px',marginLeft:6,fontWeight:700,letterSpacing:0.5,animation:'urgentPulse 1.5s ease-in-out infinite'}}>⚠ {carry}개 이월</span>}
-            </div>
-            {Object.keys(prod).length===0
-              ?<div style={{fontSize:11,color:mc}}>완료 항목 없음</div>
-              :(()=>{
-                // 그룹별 합산
-                const grpMap={};
-                const grpDetail={};
-                Object.entries(prod).forEach(([code,q])=>{
-                  const grp=sd[code]?sd[code].g:'기타';
-                  grpMap[grp]=(grpMap[grp]||0)+q;
-                  if(!grpDetail[grp])grpDetail[grp]=[];
-                  grpDetail[grp].push({size:getSizeKey(sd[code]?.n)||code,q});
-                  grpDetail[grp].sort((a,b)=>(SIZE_ORDER[a.size]??9)-(SIZE_ORDER[b.size]??9));
-                });
-                return <div className="flex flex-col gap-1.5">{Object.entries(grpMap).map(([grp,total])=>{
-                  const grpColor=GC[grp]||'#6b7280';
-                  const grpBg=GB[grp]||'#f3f4f6';
-                  const details=grpDetail[grp]||[];
-                  const sumTotal=Object.values(grpMap).reduce((a,b)=>a+b,0);
-                  const barPct=Math.round((total/sumTotal)*100);
-                  return <div key={grp} className="relative group cursor-default"
-                    style={{borderRadius:8,background:'#f3f4f6',height:38,animation:`fadeSlideUp ${0.2+Object.keys(grpMap).indexOf(grp)*0.08}s ease both`,transition:'transform 0.15s'}}
-                    onMouseEnter={e=>e.currentTarget.style.transform='translateY(-2px)'}
-                    onMouseLeave={e=>e.currentTarget.style.transform=''}>
-                    <div style={{position:'absolute',top:0,left:0,height:'100%',width:`${barPct}%`,background:grpBg,borderRadius:8,transition:'width 0.6s ease'}}/>
-                    <div style={{position:'relative',height:'100%',display:'flex',alignItems:'center',justifyContent:'space-between',padding:'0 12px',zIndex:1}}>
-                      <span style={{fontSize:11,color:grpColor,fontWeight:600}}>{grp}</span>
-                      <span style={{fontSize:16,fontWeight:800,color:grpColor}}>{total}<span style={{fontSize:10,fontWeight:500,marginLeft:2,opacity:0.75}}>개</span></span>
+      {isMonday
+        ?<div className="flex flex-col gap-5">
+          {mondayDays.map(({d,fmt,prod,carry,qA,qB})=>{
+            const isWknd=d.getDay()===0||d.getDay()===6;
+            return <div key={fmt}>
+              <div className="flex items-center gap-2 mb-2">
+                <span className={`text-xs font-semibold ${isWknd?'text-red-500':'text-gray-500'}`}>{fmt}</span>
+                <div className="flex-1 h-px bg-gray-200"/>
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                {[{line:'B',label:'1라인 (기타)',borderC:'#f97316',bg:'#fff7ed',tc:'#c2410c',mc:'#fb923c',qty:qB,carry:carry.B,prod:prod.B},
+                  {line:'A',label:'2라인 (일룸/이브닝/키즈)',borderC:'#3b82f6',bg:'#eff6ff',tc:'#1d4ed8',mc:'#60a5fa',qty:qA,carry:carry.A,prod:prod.A}
+                ].map(({line,label,borderC,bg,tc,mc,qty,carry,prod})=>
+                  <div key={line} style={{background:bg,borderRadius:12,padding:'16px 20px',border:`1.5px solid ${borderC}22`,animation:'fadeSlideUp 0.4s ease',position:'relative',overflow:'hidden'}}>
+                    <div style={{position:'absolute',top:0,left:0,width:4,height:'100%',background:borderC,borderRadius:'12px 0 0 12px'}}/>
+                    <div style={{fontSize:11,fontWeight:600,color:tc,marginBottom:6,letterSpacing:0.3}}>{label}</div>
+                    <div style={{display:'flex',alignItems:'baseline',gap:8,marginBottom:12}}>
+                      <span style={{fontSize:32,fontWeight:700,color:tc,lineHeight:1}}>{qty.toLocaleString()}</span>
+                      <span style={{fontSize:12,color:mc}}>개</span>
+                      {carry>0&&<span style={{fontSize:10,color:'white',background:'#ef4444',borderRadius:4,padding:'3px 8px',marginLeft:6,fontWeight:700,letterSpacing:0.5,animation:'urgentPulse 1.5s ease-in-out infinite'}}>⚠ {carry}개 이월</span>}
                     </div>
-                    <div className="absolute bottom-full left-0 mb-2 hidden group-hover:block" style={{minWidth:110,zIndex:50}}>
-                      <div style={{background:'#1f2937',color:'white',borderRadius:8,padding:'8px 10px',fontSize:11,boxShadow:'0 4px 16px rgba(0,0,0,0.25)',animation:'tooltipPop 0.15s ease'}}>
-                        {details.map((d,i)=><div key={i} style={{display:'flex',justifyContent:'space-between',gap:12,marginBottom:i<details.length-1?3:0}}>
-                          <span style={{opacity:0.7}}>{d.size}</span><span style={{fontWeight:600}}>{d.q}개</span>
-                        </div>)}
+                    {Object.keys(prod).length===0
+                      ?<div style={{fontSize:11,color:mc}}>완료 항목 없음</div>
+                      :(()=>{
+                        const grpMap={};const grpDetail={};
+                        Object.entries(prod).forEach(([code,q])=>{const grp=sd[code]?sd[code].g:'기타';grpMap[grp]=(grpMap[grp]||0)+q;if(!grpDetail[grp])grpDetail[grp]=[];grpDetail[grp].push({size:getSizeKey(sd[code]?.n)||code,q});grpDetail[grp].sort((a,b)=>(SIZE_ORDER[a.size]??9)-(SIZE_ORDER[b.size]??9));});
+                        return <div className="flex flex-col gap-1.5">{Object.entries(grpMap).map(([grp,total])=>{
+                          const grpColor=GC[grp]||'#6b7280';const grpBg=GB[grp]||'#f3f4f6';const details=grpDetail[grp]||[];const sumTotal=Object.values(grpMap).reduce((a,b)=>a+b,0);const barPct=Math.round((total/sumTotal)*100);
+                          return <div key={grp} className="relative group cursor-default"
+                            style={{borderRadius:8,background:'#f3f4f6',height:38,animation:`fadeSlideUp ${0.2+Object.keys(grpMap).indexOf(grp)*0.08}s ease both`,transition:'transform 0.15s'}}
+                            onMouseEnter={e=>e.currentTarget.style.transform='translateY(-2px)'}
+                            onMouseLeave={e=>e.currentTarget.style.transform=''}>
+                            <div style={{position:'absolute',top:0,left:0,height:'100%',width:`${barPct}%`,background:grpBg,borderRadius:8,transition:'width 0.6s ease'}}/>
+                            <div style={{position:'relative',height:'100%',display:'flex',alignItems:'center',justifyContent:'space-between',padding:'0 12px',zIndex:1}}>
+                              <span style={{fontSize:11,color:grpColor,fontWeight:600}}>{grp}</span>
+                              <span style={{fontSize:16,fontWeight:800,color:grpColor}}>{total}<span style={{fontSize:10,fontWeight:500,marginLeft:2,opacity:0.75}}>개</span></span>
+                            </div>
+                            <div className="absolute bottom-full left-0 mb-2 hidden group-hover:block" style={{minWidth:110,zIndex:50}}>
+                              <div style={{background:'#1f2937',color:'white',borderRadius:8,padding:'8px 10px',fontSize:11,boxShadow:'0 4px 16px rgba(0,0,0,0.25)',animation:'tooltipPop 0.15s ease'}}>
+                                {details.map((d,i)=><div key={i} style={{display:'flex',justifyContent:'space-between',gap:12,marginBottom:i<details.length-1?3:0}}>
+                                  <span style={{opacity:0.7}}>{d.size}</span><span style={{fontWeight:600}}>{d.q}개</span>
+                                </div>)}
+                              </div>
+                            </div>
+                          </div>;
+                        })}</div>;
+                      })()
+                    }
+                  </div>
+                )}
+              </div>
+            </div>;
+          })}
+        </div>
+        :<div className="grid grid-cols-2 gap-4">
+          {[{line:'B',label:'1라인 (기타)',borderC:'#f97316',bg:'#fff7ed',tc:'#c2410c',mc:'#fb923c',qty:ydQty.B,carry:ydCarry.B,prod:ydProduced.B},
+            {line:'A',label:'2라인 (일룸/이브닝/키즈)',borderC:'#3b82f6',bg:'#eff6ff',tc:'#1d4ed8',mc:'#60a5fa',qty:ydQty.A,carry:ydCarry.A,prod:ydProduced.A}
+          ].map(({line,label,borderC,bg,tc,mc,qty,carry,prod})=>
+            <div key={line} style={{background:bg,borderRadius:12,padding:'16px 20px',border:`1.5px solid ${borderC}22`,animation:'fadeSlideUp 0.4s ease',position:'relative',overflow:'hidden'}}>
+              <div style={{position:'absolute',top:0,left:0,width:4,height:'100%',background:borderC,borderRadius:'12px 0 0 12px'}}/>
+              <div style={{fontSize:11,fontWeight:600,color:tc,marginBottom:6,letterSpacing:0.3}}>{label}</div>
+              <div style={{display:'flex',alignItems:'baseline',gap:8,marginBottom:12}}>
+                <span style={{fontSize:32,fontWeight:700,color:tc,lineHeight:1}}>{qty.toLocaleString()}</span>
+                <span style={{fontSize:12,color:mc}}>개</span>
+                {carry>0&&<span style={{fontSize:10,color:'white',background:'#ef4444',borderRadius:4,padding:'3px 8px',marginLeft:6,fontWeight:700,letterSpacing:0.5,animation:'urgentPulse 1.5s ease-in-out infinite'}}>⚠ {carry}개 이월</span>}
+              </div>
+              {Object.keys(prod).length===0
+                ?<div style={{fontSize:11,color:mc}}>완료 항목 없음</div>
+                :(()=>{
+                  const grpMap={};
+                  const grpDetail={};
+                  Object.entries(prod).forEach(([code,q])=>{
+                    const grp=sd[code]?sd[code].g:'기타';
+                    grpMap[grp]=(grpMap[grp]||0)+q;
+                    if(!grpDetail[grp])grpDetail[grp]=[];
+                    grpDetail[grp].push({size:getSizeKey(sd[code]?.n)||code,q});
+                    grpDetail[grp].sort((a,b)=>(SIZE_ORDER[a.size]??9)-(SIZE_ORDER[b.size]??9));
+                  });
+                  return <div className="flex flex-col gap-1.5">{Object.entries(grpMap).map(([grp,total])=>{
+                    const grpColor=GC[grp]||'#6b7280';
+                    const grpBg=GB[grp]||'#f3f4f6';
+                    const details=grpDetail[grp]||[];
+                    const sumTotal=Object.values(grpMap).reduce((a,b)=>a+b,0);
+                    const barPct=Math.round((total/sumTotal)*100);
+                    return <div key={grp} className="relative group cursor-default"
+                      style={{borderRadius:8,background:'#f3f4f6',height:38,animation:`fadeSlideUp ${0.2+Object.keys(grpMap).indexOf(grp)*0.08}s ease both`,transition:'transform 0.15s'}}
+                      onMouseEnter={e=>e.currentTarget.style.transform='translateY(-2px)'}
+                      onMouseLeave={e=>e.currentTarget.style.transform=''}>
+                      <div style={{position:'absolute',top:0,left:0,height:'100%',width:`${barPct}%`,background:grpBg,borderRadius:8,transition:'width 0.6s ease'}}/>
+                      <div style={{position:'relative',height:'100%',display:'flex',alignItems:'center',justifyContent:'space-between',padding:'0 12px',zIndex:1}}>
+                        <span style={{fontSize:11,color:grpColor,fontWeight:600}}>{grp}</span>
+                        <span style={{fontSize:16,fontWeight:800,color:grpColor}}>{total}<span style={{fontSize:10,fontWeight:500,marginLeft:2,opacity:0.75}}>개</span></span>
                       </div>
-                    </div>
-                  </div>;
-                })}</div>;
-              })()
-            }
-          </div>
-        )}
-      </div>
+                      <div className="absolute bottom-full left-0 mb-2 hidden group-hover:block" style={{minWidth:110,zIndex:50}}>
+                        <div style={{background:'#1f2937',color:'white',borderRadius:8,padding:'8px 10px',fontSize:11,boxShadow:'0 4px 16px rgba(0,0,0,0.25)',animation:'tooltipPop 0.15s ease'}}>
+                          {details.map((d,i)=><div key={i} style={{display:'flex',justifyContent:'space-between',gap:12,marginBottom:i<details.length-1?3:0}}>
+                            <span style={{opacity:0.7}}>{d.size}</span><span style={{fontWeight:600}}>{d.q}개</span>
+                          </div>)}
+                        </div>
+                      </div>
+                    </div>;
+                  })}</div>;
+                })()
+              }
+            </div>
+          )}
+        </div>
+      }
     </div>
 
     <div className="grid grid-cols-3 gap-4 mb-5">
@@ -674,6 +718,7 @@ function Plan({inv,plan,mp,setMp,isA,capacity,setCapacity,sd,codes,groups,comple
   const[capWarn,setCapWarn]=useState(null);
   const[apsGate,setApsGate]=useState(null); // {missing}
   const[apsModal,setApsModal]=useState(null); // {open:true,scenarios,...}
+  const[apsDatePopup,setApsDatePopup]=useState(null); // 자동 계획 진입 직전 기간 설정 {fromDate,toDate}
   const[ganttHover,setGanttHover]=useState(null); // 셀 hover 시 항목별 상세 툴팁 {label,line,date,items,x,y}
   const[apsEditor,setApsEditor]=useState(null); // {dates,shortages,scenarioName,originalMetrics,stagedSchedule}
   const[mpHistoryOpen,setMpHistoryOpen]=useState(false);
@@ -853,8 +898,12 @@ function Plan({inv,plan,mp,setMp,isA,capacity,setCapacity,sd,codes,groups,comple
     // 2. 그룹 스펙 검사 (강선/높이/부직포 미입력 그룹)
     const missing=getMissingSpecGroups(groupSpec);
     if(missing.length>0){setApsGate({missing});return}
-    // 3. 시뮬 실행
-    runScenarioSim();
+    // 3. 기간 설정 팝업 (메인 기간과 별도)
+    const saved=LS('apsDateRange');
+    setApsDatePopup({
+      fromDate:saved&&saved.fromDate?saved.fromDate:startDate,
+      toDate:saved&&saved.toDate?saved.toDate:endDate,
+    });
   };
   // 모달이 열려있을 때 안전재고·capacity·코일러·휴일 변경 시 자동 재시뮬
   useEffect(()=>{
@@ -1096,6 +1145,46 @@ function Plan({inv,plan,mp,setMp,isA,capacity,setCapacity,sd,codes,groups,comple
           })()
       }
     </div>}
+    {apsDatePopup&&(()=>{
+      const invalid=apsDatePopup.toDate<apsDatePopup.fromDate;
+      const differs=apsDatePopup.fromDate!==startDate||apsDatePopup.toDate!==endDate;
+      return <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={()=>setApsDatePopup(null)}>
+        <div className="bg-white rounded-xl shadow-2xl p-6 max-w-md w-full" onClick={e=>e.stopPropagation()}>
+          <div className="flex items-baseline justify-between mb-1">
+            <h3 className="text-base font-bold">자동 계획 — 기간 설정</h3>
+            <button onClick={()=>setApsDatePopup(null)} className="text-gray-400 hover:text-gray-600 text-lg">✕</button>
+          </div>
+          <p className="text-xs text-gray-500 mb-4">계획할 기간만 입력하세요. 메인 화면 기간은 그대로 유지됩니다.</p>
+          <div className="grid grid-cols-2 gap-3 mb-3">
+            <div>
+              <div className="text-xs text-gray-500 mb-1">시작일</div>
+              <input type="date" value={apsDatePopup.fromDate}
+                onChange={e=>setApsDatePopup(p=>({...p,fromDate:e.target.value}))}
+                className="w-full px-2 py-1.5 border border-gray-200 rounded text-sm focus:outline-none focus:ring-2 focus:ring-blue-200"/>
+            </div>
+            <div>
+              <div className="text-xs text-gray-500 mb-1">종료일</div>
+              <input type="date" value={apsDatePopup.toDate}
+                onChange={e=>setApsDatePopup(p=>({...p,toDate:e.target.value}))}
+                className="w-full px-2 py-1.5 border border-gray-200 rounded text-sm focus:outline-none focus:ring-2 focus:ring-blue-200"/>
+            </div>
+          </div>
+          {invalid&&<div className="text-xs text-red-600 bg-red-50 px-3 py-2 rounded mb-3">종료일이 시작일보다 이전입니다.</div>}
+          {!invalid&&differs&&<div className="text-xs text-amber-700 bg-amber-50 px-3 py-2 rounded mb-3">메인 화면은 {startDate} ~ {endDate} 표시 중. 자동 계획만 별도 기간 적용됩니다.</div>}
+          <div className="flex gap-2">
+            <button onClick={()=>setApsDatePopup(null)} className="px-4 py-2 text-xs border border-gray-200 text-gray-500 rounded-lg hover:bg-gray-50">취소</button>
+            <button disabled={invalid}
+              onClick={()=>{
+                LS('apsDateRange',{fromDate:apsDatePopup.fromDate,toDate:apsDatePopup.toDate});
+                const sd2=apsDatePopup.fromDate,ed2=apsDatePopup.toDate;
+                setApsDatePopup(null);
+                runScenarioSim({startDate:sd2,endDate:ed2});
+              }}
+              className={`flex-1 py-2 text-xs rounded-lg font-medium ${invalid?'bg-gray-200 text-gray-400 cursor-not-allowed':'bg-blue-600 text-white hover:bg-blue-700'}`}>시작 →</button>
+          </div>
+        </div>
+      </div>;
+    })()}
     {apsModal&&<div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={()=>setApsModal(null)}>
       <div className="bg-white rounded-xl shadow-2xl p-6 w-full max-w-5xl max-h-[90vh] overflow-auto" onClick={e=>e.stopPropagation()}>
         <div className="flex items-baseline justify-between mb-4">
