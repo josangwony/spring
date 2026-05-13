@@ -139,18 +139,49 @@ function normalizeCapacity(v){
 }
 function totalCapacity(c){const n=normalizeCapacity(c);return n.A+n.B}
 
-// 부족 이벤트 추출: 시작재고는 inv만 사용 (시작일 이전 mp 합산 X)
+// 시작일 이전 미반영 mp 잔여량 산출
+// mp[c][d] - Σ completedCards[c_d_*].qty (AB 분할의 라인별 완료를 모두 차감)
+function mpRemainingQty(mp,completedCards,code,date){
+  const v=mp&&mp[code]?mp[code][date]:undefined;
+  const mpQty=typeof v==='object'?(v&&v.qty||0):(v||0);
+  if(mpQty<=0)return 0;
+  let doneQty=0;
+  if(completedCards){
+    const prefix=code+'_'+date+'_';
+    Object.keys(completedCards).forEach(k=>{
+      if(k.indexOf(prefix)===0){
+        const cc=completedCards[k];
+        doneQty+=(cc&&cc.qty)||0;
+      }
+    });
+  }
+  return Math.max(0,mpQty-doneQty);
+}
+
+// 부족 이벤트 추출
+// 시작재고 = inv + (시뮬 시작일 이전의 "미완료 mp" 잔여) - (시뮬 시작일 이전의 plan 출고)
 // priority='real' (재고<0, 출고 펑크) — 절대 우선
 // priority='safety' (0≤재고<안전재고선) — 후순위
-function extractShortages(inv,plan,codes,sd,dates,safetyDays,springMonthlyAvg){
+function extractShortages(inv,plan,codes,sd,dates,safetyDays,springMonthlyAvg,mp,completedCards){
   const shortages=[];
+  const simStart=dates[0];
   codes.forEach(c=>{
     const monthly=springMonthlyAvg[c]||0;
     const planTotal=(plan[c]||[]).reduce((a,b)=>a+b.qty,0);
     if(monthly<=0&&planTotal<=0)return;
-    const dailyAvg=monthly/30;
+    // 안전재고는 영업일 기준 (주 5일 × 약 4.2주 = 21일)
+    const dailyAvg=monthly/21;
     const safetyLine=safetyDays*dailyAvg;
     let run=inv[c]||0;
+    // 시뮬 시작일 이전: 미완료 mp(미반영 생산) 가산
+    if(mp&&mp[c]){
+      Object.keys(mp[c]).forEach(d=>{
+        if(d>=simStart)return;
+        run+=mpRemainingQty(mp,completedCards,c,d);
+      });
+    }
+    // 시뮬 시작일 이전: plan 출고 차감
+    (plan[c]||[]).forEach(p=>{if(p.date<simStart)run-=p.qty});
     for(const d of dates){
       const out=(plan[c]||[]).filter(p=>p.date===d).reduce((a,b)=>a+b.qty,0);
       run-=out;
@@ -175,7 +206,8 @@ function extractShortages(inv,plan,codes,sd,dates,safetyDays,springMonthlyAvg){
 // orderedShortages: 시나리오별 정렬된 부족 이벤트 배열
 // capacity: {A,B} 라인별 일 capacity (개/일)
 // holidays: [{date,memo}] 사업장 월력 휴무일 (토/일은 항상 자동 휴일)
-function placeShortages(orderedShortages,dates,capacity,groupSpec,coilerMin,holidays){
+// initialGroups: {A,B} 시뮬 시작일 이전 진행 중이던 라인별 그룹. 첫 작업의 교체시간 계산에 사용.
+function placeShortages(orderedShortages,dates,capacity,groupSpec,coilerMin,holidays,initialGroups){
   const cap=normalizeCapacity(capacity);
   const holidaySet=new Set((holidays||[]).map(h=>h.date));
   function isWorkday(d){
@@ -194,7 +226,7 @@ function placeShortages(orderedShortages,dates,capacity,groupSpec,coilerMin,holi
       const its=schedule[line][dates[i]].items;
       if(its.length>0)return its[its.length-1].group;
     }
-    return null;
+    return initialGroups?(initialGroups[line]||null):null;
   }
   function placeOnDay(line,dateIdx,group,code,want){
     const d=dates[dateIdx];
@@ -272,10 +304,10 @@ function splitByPriority(shortages){
   return [shortages.filter(s=>s.priority==='real'),shortages.filter(s=>s.priority!=='real')];
 }
 // 시나리오 ① 납기 우선 (개별 부족 그대로, real 먼저)
-function runDueDateFirst(shortages,dates,capacity,groupSpec,coilerMin,holidays){
+function runDueDateFirst(shortages,dates,capacity,groupSpec,coilerMin,holidays,initialGroups){
   const [real,safety]=splitByPriority(shortages);
   const sortByDue=arr=>[...arr].sort((a,b)=>a.dueDate.localeCompare(b.dueDate));
-  return placeShortages([...sortByDue(real),...sortByDue(safety)],dates,capacity,groupSpec,coilerMin,holidays);
+  return placeShortages([...sortByDue(real),...sortByDue(safety)],dates,capacity,groupSpec,coilerMin,holidays,initialGroups);
 }
 // 그룹 묶음 정렬 헬퍼 (시나리오 ②③ 공통)
 function orderByGroupCluster(shortages,dates){
@@ -296,13 +328,13 @@ function orderByGroupCluster(shortages,dates){
 }
 // 시나리오 ② 교체 최소: 같은 코드는 real/safety 무관하게 먼저 통합(real 우선)해
 // 같은 셋업에서 한 번에 생산되도록 함. 그 후 real 먼저(그룹 묶음) → safety 나중(그룹 묶음).
-function runChangeoverMin(shortages,dates,capacity,groupSpec,coilerMin,holidays){
+function runChangeoverMin(shortages,dates,capacity,groupSpec,coilerMin,holidays,initialGroups){
   const merged=consolidateByCode(shortages);
   const [real,safety]=splitByPriority(merged);
-  return placeShortages([...orderByGroupCluster(real,dates),...orderByGroupCluster(safety,dates)],dates,capacity,groupSpec,coilerMin,holidays);
+  return placeShortages([...orderByGroupCluster(real,dates),...orderByGroupCluster(safety,dates)],dates,capacity,groupSpec,coilerMin,holidays,initialGroups);
 }
 // 시나리오 ③ 중간: real 먼저(alpha 가중) → safety 나중(alpha 가중)
-function runBalanced(shortages,dates,capacity,groupSpec,alpha,coilerMin,holidays){
+function runBalanced(shortages,dates,capacity,groupSpec,alpha,coilerMin,holidays,initialGroups){
   const [real,safety]=splitByPriority(shortages);
   function balanceSort(arr){
     const consolidated=consolidateByCode(arr);
@@ -319,7 +351,7 @@ function runBalanced(shortages,dates,capacity,groupSpec,alpha,coilerMin,holidays
       return a.dueDate.localeCompare(b.dueDate);
     });
   }
-  return placeShortages([...balanceSort(real),...balanceSort(safety)],dates,capacity,groupSpec,coilerMin,holidays);
+  return placeShortages([...balanceSort(real),...balanceSort(safety)],dates,capacity,groupSpec,coilerMin,holidays,initialGroups);
 }
 // 편집된 schedule에서 부족 이벤트 재산출 (편집 후 메트릭 재계산용)
 function recomputeShortagesLeft(schedule,shortages,dates){
@@ -346,11 +378,12 @@ function countCapacityExceedDays(schedule,dates,capacity){
   return count;
 }
 // 시나리오 결과 메트릭 (priority 분리: 납기 준수율은 real만, 안전재고 충족률은 safety만)
-function computeScenarioMetrics(result,shortages){
+// initialGroups: {A,B} 시뮬 직전 진행 그룹. 첫 작업이 다른 그룹이면 교체 1회로 카운트.
+function computeScenarioMetrics(result,shortages,initialGroups){
   const {schedule,shortagesLeft}=result;
   let changeoverCount=0,changeoverMin=0,totalProduced=0;
   ['A','B'].forEach(line=>{
-    let prevG=null;
+    let prevG=initialGroups?(initialGroups[line]||null):null;
     Object.keys(schedule[line]).sort().forEach(d=>{
       schedule[line][d].items.forEach(it=>{
         if(prevG&&prevG!==it.group){changeoverCount++;changeoverMin+=it.changeoverMin||0}
@@ -382,6 +415,53 @@ function scheduleToMp(schedule,dates){
   });
   return mp;
 }
+// 시뮬 시작일 직전 영업일의 라인별 마지막 그룹 추출 (첫 작업의 교체시간 계산용)
+// mp + lineOverride를 역행하며 가장 가까운 작업일을 찾아 그 날 라인별 그룹 set 중 코드 정렬 마지막을 채택(결정적)
+// AB 분할 항목은 양 라인 모두에 카운트
+function computeInitialGroups(mp,lineOverride,sd,simStartDate,holidays,groupSpec){
+  const result={A:null,B:null};
+  const holidaySet=new Set((holidays||[]).map(h=>h.date));
+  function isWorkday(d){
+    const day=new Date(d).getDay();
+    if(day===0||day===6)return false;
+    if(holidaySet.has(d))return false;
+    return true;
+  }
+  function defaultLine(code){
+    const g=sd&&sd[code]?sd[code].g:null;
+    return g?getLineForGroup(g,groupSpec):'B';
+  }
+  function getLineFor(code,date){
+    const ov=lineOverride?lineOverride[code+'_'+date]:null;
+    if(!ov)return defaultLine(code);
+    return typeof ov==='object'?ov.line:ov;
+  }
+  // 시작일에서 최대 90일 거꾸로 — 라인별로 채워지면 종료
+  const start=new Date(simStartDate);
+  for(let i=1;i<=90&&(!result.A||!result.B);i++){
+    const dt=new Date(start);dt.setDate(dt.getDate()-i);
+    const d=dateToYMD(dt);
+    if(!isWorkday(d))continue;
+    const onLine={A:[],B:[]};
+    Object.keys(mp||{}).forEach(c=>{
+      const v=(mp[c]||{})[d];
+      const qty=typeof v==='object'?(v&&v.qty||0):(v||0);
+      if(qty<=0)return;
+      const line=getLineFor(c,d);
+      if(line==='A'||line==='B')onLine[line].push(c);
+      else if(line==='AB'){onLine.A.push(c);onLine.B.push(c)}
+    });
+    ['A','B'].forEach(line=>{
+      if(result[line])return;
+      if(onLine[line].length===0)return;
+      onLine[line].sort();
+      const lastCode=onLine[line][onLine[line].length-1];
+      result[line]=sd&&sd[lastCode]?sd[lastCode].g:null;
+    });
+  }
+  return result;
+}
+
 // schedule을 lineOverride 객체로 변환 (시뮬 영역만)
 function scheduleToLineOverride(schedule,dates){
   const ov={};

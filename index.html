@@ -121,10 +121,10 @@ const GB={"헤이븐 180":"#dbeafe","헤이븐 140":"#dbeafe","헤이븐 빌트�
 //            SIZE_ORDER, getSizeKey, inferGroup, buildSD, buildCodes,
 //            LINE_MIN_PER_DAY, getLineForGroup, dateToYMD, buildDateRange,
 //            normalizeCapacity, totalCapacity,
-//            extractShortages, placeShortages, consolidateByCode, splitByPriority,
+//            mpRemainingQty, extractShortages, placeShortages, consolidateByCode, splitByPriority,
 //            orderByGroupCluster, runDueDateFirst, runChangeoverMin, runBalanced,
 //            recomputeShortagesLeft, countCapacityExceedDays, computeScenarioMetrics,
-//            scheduleToMp, scheduleToLineOverride
+//            scheduleToMp, scheduleToLineOverride, computeInitialGroups
 
 // LS: localStorage 캐시 + Firebase 비동기 동기화
 function LS(k,v){
@@ -139,7 +139,7 @@ function LS(k,v){
 // Firebase → localStorage 동기화 (앱 로드 시 1회 + 실시간)
 async function syncFromFirebase(){
   if(!window.__fb)return;
-  const SYNC_KEYS=['baseInv','txns','map','hist','plan','mp','capacity','completedCards','carryLog','visitors','safetyDays','productOutbound','groupSpec','coilerMin','mpHistory','holidays'];
+  const SYNC_KEYS=['baseInv','txns','map','hist','plan','mp','capacity','completedCards','carryLog','visitors','safetyDays','productOutbound','groupSpec','coilerMin','mpHistory','holidays','invHist'];
   try{
     const data=await window.__fb.get();
     SYNC_KEYS.forEach(k=>{
@@ -758,7 +758,7 @@ function Plan({inv,plan,mp,setMp,isA,capacity,setCapacity,sd,codes,groups,comple
   const editorMetrics=useMemo(()=>{
     if(!apsEditor)return null;
     const left=recomputeShortagesLeft(apsEditor.stagedSchedule,apsEditor.shortages,apsEditor.dates);
-    const m=computeScenarioMetrics({schedule:apsEditor.stagedSchedule,shortagesLeft:left},apsEditor.shortages);
+    const m=computeScenarioMetrics({schedule:apsEditor.stagedSchedule,shortagesLeft:left},apsEditor.shortages,apsEditor.initialGroups);
     const exceed=countCapacityExceedDays(apsEditor.stagedSchedule,apsEditor.dates,capacity);
     return{...m,exceed};
   },[apsEditor,capacity]);
@@ -910,18 +910,19 @@ function Plan({inv,plan,mp,setMp,isA,capacity,setCapacity,sd,codes,groups,comple
   useEffect(()=>{
     if(!apsModal)return;
     const dts=apsModal.dates;
-    const sh=extractShortages(inv,plan,codes,sd,dts,safetyDays,springMonthlyAvg);
-    const r1=runDueDateFirst(sh,dts,capacity,groupSpec,coilerMin,holidays);
-    const r2=runChangeoverMin(sh,dts,capacity,groupSpec,coilerMin,holidays);
+    const sh=extractShortages(inv,plan,codes,sd,dts,safetyDays,springMonthlyAvg,mp,completedCards);
+    const ig=computeInitialGroups(mp,lineOverride,sd,dts[0],holidays,groupSpec);
+    const r1=runDueDateFirst(sh,dts,capacity,groupSpec,coilerMin,holidays,ig);
+    const r2=runChangeoverMin(sh,dts,capacity,groupSpec,coilerMin,holidays,ig);
     const alpha=apsModal.alpha;
-    const r3=runBalanced(sh,dts,capacity,groupSpec,alpha,coilerMin,holidays);
+    const r3=runBalanced(sh,dts,capacity,groupSpec,alpha,coilerMin,holidays,ig);
     setApsModal(prev=>prev?{
       ...prev,
-      shortages:sh,
+      shortages:sh,initialGroups:ig,
       scenarios:[
-        {id:'due',name:'납기 우선',desc:'납기 임박순으로 부족분만 즉시 생산. 교체 비용 무시.',result:r1,metrics:computeScenarioMetrics(r1,sh)},
-        {id:'co',name:'교체 최소',desc:'같은 그룹을 묶어 한 번에 생산. 미리 적재로 교체 횟수 최소화.',result:r2,metrics:computeScenarioMetrics(r2,sh)},
-        {id:'mid',name:'중간 (α='+alpha.toFixed(1)+')',desc:'납기 vs 교체 가중 평균. 슬라이더로 균형 조절.',result:r3,metrics:computeScenarioMetrics(r3,sh)},
+        {id:'due',name:'납기 우선',desc:'납기 임박순으로 부족분만 즉시 생산. 교체 비용 무시.',result:r1,metrics:computeScenarioMetrics(r1,sh,ig)},
+        {id:'co',name:'교체 최소',desc:'같은 그룹을 묶어 한 번에 생산. 미리 적재로 교체 횟수 최소화.',result:r2,metrics:computeScenarioMetrics(r2,sh,ig)},
+        {id:'mid',name:'중간 (α='+alpha.toFixed(1)+')',desc:'납기 vs 교체 가중 평균. 슬라이더로 균형 조절.',result:r3,metrics:computeScenarioMetrics(r3,sh,ig)},
       ]
     }:null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -930,18 +931,19 @@ function Plan({inv,plan,mp,setMp,isA,capacity,setCapacity,sd,codes,groups,comple
     const sd2=opts&&opts.startDate||startDate;
     const ed2=opts&&opts.endDate||endDate;
     const dts=buildDateRange(sd2,ed2);
-    const sh=extractShortages(inv,plan,codes,sd,dts,safetyDays,springMonthlyAvg);
+    const sh=extractShortages(inv,plan,codes,sd,dts,safetyDays,springMonthlyAvg,mp,completedCards);
     if(sh.length===0){alert(`기간 내 부족 품목이 없습니다.\n(안전재고 ${safetyDays}일 기준)`);return}
-    const r1=runDueDateFirst(sh,dts,capacity,groupSpec,coilerMin,holidays);
-    const r2=runChangeoverMin(sh,dts,capacity,groupSpec,coilerMin,holidays);
+    const ig=computeInitialGroups(mp,lineOverride,sd,dts[0],holidays,groupSpec);
+    const r1=runDueDateFirst(sh,dts,capacity,groupSpec,coilerMin,holidays,ig);
+    const r2=runChangeoverMin(sh,dts,capacity,groupSpec,coilerMin,holidays,ig);
     const alpha=opts&&typeof opts.alpha==='number'?opts.alpha:0.5;
-    const r3=runBalanced(sh,dts,capacity,groupSpec,alpha,coilerMin,holidays);
+    const r3=runBalanced(sh,dts,capacity,groupSpec,alpha,coilerMin,holidays,ig);
     setApsModal({
-      dates:dts,shortages:sh,alpha,
+      dates:dts,shortages:sh,alpha,initialGroups:ig,
       scenarios:[
-        {id:'due',name:'납기 우선',desc:'납기 임박순으로 부족분만 즉시 생산. 교체 비용 무시.',result:r1,metrics:computeScenarioMetrics(r1,sh)},
-        {id:'co',name:'교체 최소',desc:'같은 그룹을 묶어 한 번에 생산. 미리 적재로 교체 횟수 최소화.',result:r2,metrics:computeScenarioMetrics(r2,sh)},
-        {id:'mid',name:'중간 (α='+alpha.toFixed(1)+')',desc:'납기 vs 교체 가중 평균. 슬라이더로 균형 조절.',result:r3,metrics:computeScenarioMetrics(r3,sh)},
+        {id:'due',name:'납기 우선',desc:'납기 임박순으로 부족분만 즉시 생산. 교체 비용 무시.',result:r1,metrics:computeScenarioMetrics(r1,sh,ig)},
+        {id:'co',name:'교체 최소',desc:'같은 그룹을 묶어 한 번에 생산. 미리 적재로 교체 횟수 최소화.',result:r2,metrics:computeScenarioMetrics(r2,sh,ig)},
+        {id:'mid',name:'중간 (α='+alpha.toFixed(1)+')',desc:'납기 vs 교체 가중 평균. 슬라이더로 균형 조절.',result:r3,metrics:computeScenarioMetrics(r3,sh,ig)},
       ]
     });
   };
@@ -1201,8 +1203,9 @@ function Plan({inv,plan,mp,setMp,isA,capacity,setCapacity,sd,codes,groups,comple
             <span className="text-gray-400">교체</span>
             <input type="range" min="0" max="1" step="0.1" value={apsModal.alpha} onChange={e=>{
               const a=parseFloat(e.target.value);
-              const r3=runBalanced(apsModal.shortages,apsModal.dates,capacity,groupSpec,a,coilerMin,holidays);
-              const next={...apsModal,alpha:a,scenarios:apsModal.scenarios.map(s=>s.id==='mid'?{...s,name:'중간 (α='+a.toFixed(1)+')',result:r3,metrics:computeScenarioMetrics(r3,apsModal.shortages)}:s)};
+              const ig=apsModal.initialGroups;
+              const r3=runBalanced(apsModal.shortages,apsModal.dates,capacity,groupSpec,a,coilerMin,holidays,ig);
+              const next={...apsModal,alpha:a,scenarios:apsModal.scenarios.map(s=>s.id==='mid'?{...s,name:'중간 (α='+a.toFixed(1)+')',result:r3,metrics:computeScenarioMetrics(r3,apsModal.shortages,ig)}:s)};
               setApsModal(next);
             }} className="w-20"/>
             <span className="text-gray-400">납기</span>
@@ -1246,7 +1249,7 @@ function Plan({inv,plan,mp,setMp,isA,capacity,setCapacity,sd,codes,groups,comple
               </div>
               <button onClick={()=>{
                 const staged=JSON.parse(JSON.stringify(s.result.schedule));
-                setApsEditor({dates:apsModal.dates,shortages:apsModal.shortages,scenarioName:s.name,originalMetrics:s.metrics,stagedSchedule:staged});
+                setApsEditor({dates:apsModal.dates,shortages:apsModal.shortages,scenarioName:s.name,originalMetrics:s.metrics,stagedSchedule:staged,initialGroups:apsModal.initialGroups});
                 setApsModal(null);
               }} className="w-full py-2 text-xs bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium">이 플랜 선택 →</button>
             </div>
@@ -1843,7 +1846,7 @@ function Plan({inv,plan,mp,setMp,isA,capacity,setCapacity,sd,codes,groups,comple
   </div>);
 }
 
-function Inv({inv,setInv,setTxns,addTxn,sd,codes,groups,liveInv}){
+function Inv({inv,setInv,setTxns,addTxn,sd,codes,groups,liveInv,invHist,pushInvHist}){
   const downloadInventoryTemplate=()=>{
     const wb=XLSX.utils.book_new();
     const data=[['반제품코드','반제품명','현재고']];
@@ -1887,6 +1890,7 @@ function Inv({inv,setInv,setTxns,addTxn,sd,codes,groups,liveInv}){
             if(!confirm(cnt+'종의 초기 재고를 새 값으로 재세팅합니다.\n누적된 거래 내역도 같이 초기화됩니다.\n\n진행하시겠습니까?'))return false;
             setInv(ni);LS('baseInv',ni);
             setTxns([]);LS('txns',[]);
+            if(pushInvHist)pushInvHist({type:'reset',fileName:f.name,count:cnt});
             alert(cnt+'종의 초기 재고가 반영되고, 거래 내역이 초기화되었습니다.');
             return true;
           };
@@ -1928,7 +1932,7 @@ function Inv({inv,setInv,setTxns,addTxn,sd,codes,groups,liveInv}){
   };
   return(<div>
     <div className="flex items-center justify-between mb-4">
-      <div><h2 className="text-sm font-medium">초기 재고 / 현재고 조정</h2><p className="text-xs text-gray-500 mt-0.5">월말 재실사는 [엑셀에서 불러오기], 평소 ±조정은 아래 표 직접 수정 (수정 시 자동 저장)</p></div>
+      <div><h2 className="text-sm font-medium">초기 재고 / 현재고 조정</h2></div>
       <div className="flex gap-2">
         <button onClick={downloadInventoryTemplate} className="px-3 py-2 text-xs font-medium text-gray-500 bg-gray-100 rounded-lg hover:bg-gray-200">↓ 양식 다운로드</button>
         <button onClick={handleExcelUpload} className="px-3 py-2 text-xs font-medium text-blue-600 bg-blue-50 rounded-lg hover:bg-blue-100 border border-blue-200">엑셀에서 불러오기</button>
@@ -1961,7 +1965,10 @@ function Inv({inv,setInv,setTxns,addTxn,sd,codes,groups,liveInv}){
                 if(isNaN(newVal)||newVal<0){clearEdit();return}
                 const oldVal=liveInv[c]||0;
                 const delta=newVal-oldVal;
-                if(delta!==0)addTxn('adj_'+c+'_'+Date.now(),{[c]:delta});
+                if(delta!==0){
+                  addTxn('adj_'+c+'_'+Date.now(),{[c]:delta});
+                  if(pushInvHist)pushInvHist({type:'adjust',code:c,name:sd[c]?sd[c].n:'',group:sd[c]?sd[c].g:'',before:oldVal,after:newVal,delta});
+                }
                 clearEdit();
               }}
               onKeyDown={e=>{
@@ -1975,6 +1982,45 @@ function Inv({inv,setInv,setTxns,addTxn,sd,codes,groups,liveInv}){
           </td>
         </tr>
       )}</tbody></table>
+    </div>
+    <div className="mt-6">
+      <div className="flex items-baseline justify-between mb-2">
+        <h3 className="text-sm font-medium">변경 이력</h3>
+        <span className="text-xs text-gray-400">최대 100건 보관 · 읽기 전용</span>
+      </div>
+      <div className="border border-gray-200 rounded-lg overflow-auto" style={{maxHeight:300}}>
+        <table className="w-full text-xs">
+          <thead className="sticky top-0 bg-gray-50 border-b border-gray-200">
+            <tr>
+              <th className="text-left px-3 py-2 font-medium text-gray-500 w-36">일시</th>
+              <th className="text-left px-3 py-2 font-medium text-gray-500 w-24">유형</th>
+              <th className="text-left px-3 py-2 font-medium text-gray-500">내용</th>
+              <th className="text-right px-3 py-2 font-medium text-gray-500 w-32">변경</th>
+            </tr>
+          </thead>
+          <tbody>
+            {(!invHist||invHist.length===0)?<tr><td colSpan={4} className="text-center py-6 text-gray-400">이력 없음 (엑셀 불러오기 또는 직접 수정 시 자동 기록)</td></tr>:
+              invHist.slice().reverse().map((h,ri)=><tr key={ri} className="border-b border-gray-100 hover:bg-gray-50">
+                <td className="px-3 py-2 text-gray-500 whitespace-nowrap tabular-nums">{h.ts}</td>
+                <td className="px-3 py-2">
+                  {h.type==='reset'
+                    ?<span className="inline-block px-2 py-0.5 rounded bg-blue-50 text-blue-600 font-medium">일괄 재세팅</span>
+                    :<span className="inline-block px-2 py-0.5 rounded bg-emerald-50 text-emerald-600 font-medium">직접 조정</span>}
+                </td>
+                <td className="px-3 py-2 text-gray-700">
+                  {h.type==='reset'
+                    ?<span>{h.fileName||'(파일명 없음)'} · <span className="text-gray-500">{h.count||0}종 갱신 + 거래 내역 초기화</span></span>
+                    :<span><span className="font-mono text-gray-500">{h.code}</span> <span className="ml-1">{h.name}</span>{h.group&&<span className="ml-1"><Tag g={h.group}/></span>}</span>}
+                </td>
+                <td className="px-3 py-2 text-right whitespace-nowrap tabular-nums">
+                  {h.type==='adjust'
+                    ?<span><span className="text-gray-400">{h.before}</span> <span className="text-gray-300 mx-0.5">→</span> <span className="font-medium text-gray-700">{h.after}</span> <span className={`ml-1 ${h.delta>0?'text-emerald-600':'text-red-500'}`}>({h.delta>0?'+':''}{h.delta})</span></span>
+                    :<span className="text-gray-300">−</span>}
+                </td>
+              </tr>)}
+          </tbody>
+        </table>
+      </div>
     </div>
   </div>);
 }
@@ -2010,8 +2056,8 @@ function MapMgr({map,setMap,onUp,sd,hist}){
       // 모든 업로드 이력에서 미매핑 제품코드 수집 (중복 제거, 최신순)
       const allUm=[...new Set((hist||[]).flatMap(h=>h.unmapped||[]))];
       if(allUm.length===0)return null;
-      // 이미 매핑된 코드는 제외
-      const stillUm=allUm.filter(c=>!map[c]);
+      // 이미 매핑된 코드 + '-R' 포함 코드(반제품 자기 자신)는 제외
+      const stillUm=allUm.filter(c=>!map[c]&&!c.includes('-R'));
       if(stillUm.length===0)return null;
       return <div className="mt-4 border border-amber-200 rounded-lg p-4 bg-amber-50">
         <div className="flex items-center justify-between mb-2">
@@ -2092,6 +2138,16 @@ function App(){
   const[coilerMin,setCoilerMin]=useState(()=>{const v=LS('coilerMin');return v==null?60:v});
   const[mpHistory,setMpHistory]=useState(()=>LS('mpHistory')||[]);
   const[holidays,setHolidays]=useState(()=>LS('holidays')||[]); // [{date:'YYYY-MM-DD', memo:''}]
+  const[invHist,setInvHist]=useState(()=>LS('invHist')||[]); // 초기 재고 변경 이력 (reset/adjust)
+  const pushInvHist=(entry)=>{
+    const now=new Date();
+    const ts=`${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')} ${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}:${String(now.getSeconds()).padStart(2,'0')}`;
+    setInvHist(prev=>{
+      const next=[...(prev||[]),{ts,...entry}].slice(-100);
+      LS('invHist',next);
+      return next;
+    });
+  };
   // 모바일 감지 (max-width: 767px). 모바일이면 admin이라도 viewer 동일 UI로 강제 — 편집은 PC에서만
   const[isMobile,setIsMobile]=useState(()=>typeof window!=='undefined'&&window.matchMedia&&window.matchMedia('(max-width:767px)').matches);
   useEffect(()=>{
@@ -2139,11 +2195,12 @@ function App(){
       {const v=LS('coilerMin');setCoilerMin(v==null?60:v)}
       setMpHistory(LS('mpHistory')||[]);
       setHolidays(LS('holidays')||[]);
+      setInvHist(LS('invHist')||[]);
       setFbLoaded(true);
       // 실시간 리스너
       if(window.__fb){
         window.__fb.listen(data=>{
-          ['baseInv','txns','map','hist','plan','mp','capacity','completedCards','carryLog','visitors','safetyDays','productOutbound','groupSpec','coilerMin','mpHistory','holidays'].forEach(k=>{
+          ['baseInv','txns','map','hist','plan','mp','capacity','completedCards','carryLog','visitors','safetyDays','productOutbound','groupSpec','coilerMin','mpHistory','holidays','invHist'].forEach(k=>{
             if(data[k]!==undefined){
               try{localStorage.setItem('si_'+k,typeof data[k]==='string'?data[k]:JSON.stringify(data[k]))}catch{}
             }
@@ -2163,6 +2220,7 @@ function App(){
           {const v=LS('coilerMin');setCoilerMin(v==null?60:v)}
           setMpHistory(LS('mpHistory')||[]);
           setHolidays(LS('holidays')||[]);
+          setInvHist(LS('invHist')||[]);
         });
       }
     };
@@ -2231,7 +2289,7 @@ function App(){
         const ds=`${String(now.getMonth()+1).padStart(2,'0')}/${String(now.getDate()).padStart(2,'0')} ${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`;
         const txId='tx_'+Date.now()+'_'+Math.random().toString(36).slice(2,6);
         const nh={d:ds,f:file.name,t:ft,s:'ok',txId};
-        if(hist.find(h=>h.f===file.name&&h.s==='ok')){nh.s='dup';const h2=[...hist,nh];setHist(h2);LS('hist',h2);show('이미 등록된 파일: '+file.name,'warn');return}
+        if(hist.find(h=>h.f===file.name&&h.s==='ok')){nh.s='dup';const h2=[...hist,nh].slice(-100);setHist(h2);LS('hist',h2);show('이미 등록된 파일: '+file.name,'warn');return}
 
         if(ft==='pkg'){
           if(Object.keys(map).length===0){show('매핑이 등록되지 않았습니다. 매핑 관리에서 먼저 업로드하세요.','err');return}
@@ -2401,7 +2459,7 @@ function App(){
         }
         // pkgplan이면 기존 pkgplan 이력 active 해제
         const updHist=hist.map(h=>h.t==='pkgplan'?{...h,active:false}:h);
-        const h2=[...updHist,nh];setHist(h2);LS('hist',h2);
+        const h2=[...updHist,nh].slice(-100);setHist(h2);LS('hist',h2);
       }catch(er){show('파일 처리 오류: '+(er.message||''),'err')}
     };r.readAsArrayBuffer(file);
   };
@@ -2458,7 +2516,7 @@ function App(){
         {tab==='planning'&&<Plan inv={inv} plan={plan} mp={mp} setMp={setMp} isA={isA} capacity={capacity} setCapacity={c=>{setCapacity(c);LS('capacity',c);}} sd={sd} codes={codes} groups={groups} completedCards={completedCards} toggleComplete={toggleComplete} carryLog={carryLog} setCarryLog={setCarryLog} groupSpec={groupSpec} setGroupSpec={setGroupSpec} safetyDays={safetyDays} setSafetyDays={d=>{setSafetyDays(d);LS('safetyDays',d);}} productOutbound={productOutbound} springMonthlyAvg={springMonthlyAvg} coilerMin={coilerMin} setCoilerMin={m=>{setCoilerMin(m);LS('coilerMin',m);}} goToTab={setTab} mpHistory={mpHistory} pushMpSnapshot={pushMpSnapshot} holidays={holidays} setHolidays={h=>{setHolidays(h);LS('holidays',h);}}/>}
         {tab==='mapping'&&isA&&<MapMgr map={map} setMap={setMap} onUp={handleMapUp} sd={sd} hist={hist}/>}
         {tab==='groupSpec'&&isA&&<GroupSpecMgr groupSpec={groupSpec} setGroupSpec={setGroupSpec}/>}
-        {tab==='inventory'&&isA&&<Inv inv={baseInv} setInv={setBaseInv} setTxns={setTxns} addTxn={addTxn} sd={sd} codes={codes} groups={groups} liveInv={inv}/>}
+        {tab==='inventory'&&isA&&<Inv inv={baseInv} setInv={setBaseInv} setTxns={setTxns} addTxn={addTxn} sd={sd} codes={codes} groups={groups} liveInv={inv} invHist={invHist} pushInvHist={pushInvHist}/>}
         {tab==='history'&&isA&&<div>
           <div className="grid grid-cols-2 gap-4 mb-4 items-start">
             <div className="border border-gray-200 rounded-lg p-4 bg-[#FFFFFF]">
