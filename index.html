@@ -117,12 +117,12 @@ const GC={"헤이븐 180":"#2563eb","헤이븐 140":"#3b82f6","헤이븐 빌트�
 const GB={"헤이븐 180":"#dbeafe","헤이븐 140":"#dbeafe","헤이븐 빌트인":"#e0f2fe","쿠시노":"#ede9fe","일룸 1조닝":"#d1fae5","일룸 키즈":"#ffedd5","슬로우 1조닝":"#fef3c7","슬로우 7조닝":"#fef3c7","이브닝":"#fee2e2","모션 스프링":"#fce7f3","스탠다드":"#f3f4f6"};
 // === 알고리즘 함수와 상수는 aps-algo.js로 분리됨 (글로벌 스코프 노출) ===
 // 분리된 항목: GROUP_SPEC_DEFAULT, GROUP_LIST, SPEC_OPTIONS, SPEC_LABEL,
-//            COILER_DIFF_PAIRS, coilerChangeTime, changeoverTime, getMissingSpecGroups,
+//            COILER_DIFF_PAIRS, coilerChangeTime, changeoverTime, getSetupKey, getMissingSpecGroups,
 //            SIZE_ORDER, getSizeKey, inferGroup, buildSD, buildCodes,
 //            LINE_MIN_PER_DAY, getLineForGroup, dateToYMD, buildDateRange,
 //            normalizeCapacity, totalCapacity,
 //            mpRemainingQty, extractShortages, placeShortages, consolidateByCode, splitByPriority,
-//            orderByGroupCluster, runDueDateFirst, runChangeoverMin, runBalanced,
+//            orderByGroupCluster, runChangeoverMin,
 //            recomputeShortagesLeft, countCapacityExceedDays, computeScenarioMetrics,
 //            scheduleToMp, scheduleToLineOverride, computeInitialGroups
 
@@ -435,13 +435,59 @@ function WeeklyChart({plan}){
   return <canvas ref={canvasRef} height="140"/>;
 }
 
-function Dash({inv,map,hist,onUp,isA,plan,mp,sd,codes,groups,completedCards,carryLog}){
+function Dash({inv,map,hist,onUp,isA,plan,mp,sd,codes,groups,completedCards,carryLog,productOutbound,groupSpec,goToTab}){
   const[expandedGroup,setExpandedGroup]=useState(null);
   const[flt,setFlt]=useState('전체');
   const[sort,setSort]=useState({col:null,asc:true});
   const[shortOnly,setShortOnly]=useState(false);
+  const[checkOpen,setCheckOpen]=useState(false);
   const tot=Object.values(inv).reduce((a,b)=>a+b,0);
   const warn=codes.filter(c=>{const q=inv[c]||0,o=(plan[c]||[]).reduce((a,b)=>a+b.qty,0),i=getMpCodeTotal(mp,c);return q+i-o<=0}).length;
+  // 데이터 정합성 점검
+  const dataIssues=useMemo(()=>{
+    const issues=[];
+    // 1. 매핑 누락 — ERP 출고(productOutbound)에 있지만 map 에 없는 제품코드
+    Object.keys(productOutbound||{}).forEach(pc=>{
+      if((productOutbound[pc]||0)>0&&!(map||{})[pc]){
+        issues.push({type:'mapping_missing',label:'매핑 누락',code:pc,detail:'ERP 출고 데이터에 있지만 매핑 미등록',target:'mapping'});
+      }
+    });
+    // 2. 알 수 없는 스프링 코드 — plan/mp 에 있지만 sd(매핑된 스프링 코드 집합) 에 없음
+    const seenUnknown=new Set();
+    Object.keys(plan||{}).forEach(sc=>{
+      const total=(plan[sc]||[]).reduce((a,b)=>a+b.qty,0);
+      if(total>0&&!sd[sc]&&!seenUnknown.has(sc)){
+        seenUnknown.add(sc);
+        issues.push({type:'unknown_code',label:'알 수 없는 스프링 코드',code:sc,detail:'plan에 출고 있으나 매핑에 없음',target:'mapping'});
+      }
+    });
+    Object.keys(mp||{}).forEach(sc=>{
+      if(seenUnknown.has(sc))return;
+      const total=Object.values(mp[sc]||{}).reduce((a,v)=>a+(typeof v==='object'?v.qty||0:v||0),0);
+      if(total>0&&!sd[sc]){
+        seenUnknown.add(sc);
+        issues.push({type:'unknown_code',label:'알 수 없는 스프링 코드',code:sc,detail:'mp에 생산계획 있으나 매핑에 없음',target:'mapping'});
+      }
+    });
+    // 3. 그룹 스펙 미입력 — 강선/높이/부직포 중 누락
+    const missing=getMissingSpecGroups(groupSpec);
+    missing.forEach(m=>{
+      issues.push({type:'group_spec',label:'그룹 스펙 미입력',code:m.group,detail:`${m.fields.join('·')} 미입력`,target:'groupSpec'});
+    });
+    // 4. 그룹 라인 미설정 — GROUP_LIST 의 그룹 중 lines 비어있음
+    GROUP_LIST.forEach(g=>{
+      const s=(groupSpec||GROUP_SPEC_DEFAULT)[g];
+      if(!s||!s.lines||s.lines.length===0){
+        issues.push({type:'group_lines',label:'그룹 라인 미설정',code:g,detail:'생산 라인 미지정',target:'groupSpec'});
+      }
+    });
+    return issues;
+  },[productOutbound,map,plan,mp,sd,groupSpec]);
+  const issuesByType=useMemo(()=>{
+    const g={};
+    dataIssues.forEach(it=>{(g[it.type]=g[it.type]||[]).push(it)});
+    return g;
+  },[dataIssues]);
   // 날짜 키/포맷 헬퍼
   const _dk=d=>`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
   const _dn=['일','월','화','수','목','금','토'];
@@ -465,13 +511,58 @@ function Dash({inv,map,hist,onUp,isA,plan,mp,sd,codes,groups,completedCards,carr
   const fl=sort.col?[...flFiltered].sort((a,b)=>{const va=getVals(a),vb=getVals(b);const diff=sort.col==='q'?va.q-vb.q:va.av-vb.av;return sort.asc?diff:-diff}):flFiltered;
   const toggleSort=col=>setSort(s=>{if(s.col===col){if(s.asc)return{col,asc:false};return{col:null,asc:true}}return{col,asc:true}});
   const SH=({c,children})=><th onClick={()=>toggleSort(c)} className="text-right px-3 py-2 font-medium text-gray-500 w-20 whitespace-nowrap cursor-pointer hover:text-gray-700 select-none">{children}{sort.col===c?<span className="ml-0.5 text-blue-500">{sort.asc?'↑':'↓'}</span>:<span className="ml-0.5 text-gray-300">⇅</span>}</th>;
+  const TYPE_LABEL={mapping_missing:'매핑 누락',unknown_code:'알 수 없는 스프링 코드',group_spec:'그룹 스펙 미입력',group_lines:'그룹 라인 미설정'};
+  const TYPE_TARGET={mapping_missing:'mapping',unknown_code:'mapping',group_spec:'groupSpec',group_lines:'groupSpec'};
   return(<div>
+    {dataIssues.length>0&&<div className="mb-3">
+      <button onClick={()=>isA&&setCheckOpen(true)} className={`w-full px-3 py-2 bg-amber-50 border border-amber-300 rounded-lg text-xs text-amber-800 flex items-center justify-between ${isA?'hover:bg-amber-100 cursor-pointer':'cursor-default'}`}>
+        <span>⚠ 데이터 정합성 이슈 <span className="font-bold">{dataIssues.length}건</span> 발견{isA?' — 클릭해서 상세 보기':''}</span>
+        {isA&&<span className="text-amber-600">상세 보기 →</span>}
+      </button>
+    </div>}
     <div className="grid grid-cols-4 gap-3 mb-3">
       <MC l="총 스프링 품목" v="37" u="종" s="10개 그룹"/>
       <MC l="총 현재고" v={tot.toLocaleString()} u="개"/>
       <MC l="재고 부족 경고" v={warn} u="건" w={warn>0} s="가용재고 0 이하"/>
       <MC l="매핑 등록" v={Object.keys(map).length} u="건"/>
     </div>
+    {checkOpen&&<div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={()=>setCheckOpen(false)}>
+      <div className="bg-white rounded-xl shadow-2xl p-6 w-full max-w-3xl max-h-[85vh] flex flex-col" onClick={e=>e.stopPropagation()}>
+        <div className="flex items-baseline justify-between mb-3">
+          <div>
+            <h3 className="text-base font-bold">⚠ 데이터 정합성 점검</h3>
+            <div className="text-xs text-gray-500 mt-1">총 {dataIssues.length}건 — 알고리즘 결과 정확도에 영향. 매핑/그룹 스펙 정리 후 자동계획 다시 시도</div>
+          </div>
+          <button onClick={()=>setCheckOpen(false)} className="text-gray-400 hover:text-gray-600 text-lg">✕</button>
+        </div>
+        <div className="flex-1 overflow-auto space-y-4">
+          {Object.keys(issuesByType).map(type=>{
+            const items=issuesByType[type];
+            const target=TYPE_TARGET[type];
+            const goTo=()=>{if(goToTab&&target){goToTab(target);setCheckOpen(false)}};
+            return <div key={type} className="border border-amber-200 rounded-lg overflow-hidden">
+              <div className="flex items-center justify-between bg-amber-50 px-3 py-2">
+                <span className="text-sm font-semibold text-amber-800">{TYPE_LABEL[type]||type} <span className="text-amber-600 ml-1">({items.length}건)</span></span>
+                {target&&<button onClick={goTo} className="text-xs px-2 py-1 bg-amber-600 text-white rounded hover:bg-amber-700 font-medium">{target==='mapping'?'매핑 관리로 →':'그룹 스펙으로 →'}</button>}
+              </div>
+              <div className="bg-white max-h-48 overflow-auto">
+                <table className="w-full text-xs">
+                  <tbody>
+                    {items.slice(0,50).map((it,i)=>(
+                      <tr key={i} className="border-b border-amber-50 hover:bg-amber-50/30">
+                        <td className="px-3 py-1.5 font-mono text-gray-700 w-40">{it.code}</td>
+                        <td className="px-3 py-1.5 text-gray-600">{it.detail}</td>
+                      </tr>
+                    ))}
+                    {items.length>50&&<tr><td colSpan={2} className="px-3 py-2 text-center text-xs text-gray-400">외 {items.length-50}건 더 있음</td></tr>}
+                  </tbody>
+                </table>
+              </div>
+            </div>;
+          })}
+        </div>
+      </div>
+    </div>}
     <div className="border border-gray-200 rounded-lg p-4 bg-[#FFFFFF] mb-5">
       <div className="flex items-center justify-between mb-3">
         <h3 className="text-sm font-medium">{isMonday?`${mondayDays[0].fmt}~${mondayDays[2].fmt} 생산 현황`:`${ydFmt} 생산 현황`}</h3>
@@ -721,7 +812,20 @@ function Plan({inv,plan,mp,setMp,isA,capacity,setCapacity,sd,codes,groups,comple
   const[apsModal,setApsModal]=useState(null); // {open:true,scenarios,...}
   const[apsDatePopup,setApsDatePopup]=useState(null); // 자동 계획 진입 직전 기간 설정 {fromDate,toDate}
   const[ganttHover,setGanttHover]=useState(null); // 셀 hover 시 항목별 상세 툴팁 {label,line,date,items,x,y}
-  const[apsEditor,setApsEditor]=useState(null); // {dates,shortages,scenarioName,originalMetrics,stagedSchedule}
+  const[apsEditor,setApsEditor]=useState(null); // {dates,shortages,scenarioName,originalMetrics,stagedSchedule,initialGroups,focusCode}
+  const editorBodyRef=React.useRef(null);
+  // 편집기 진입/포커스 변경 시 focusCode 행으로 자동 스크롤
+  // deps 를 focusCode + hidden 으로만 두어 편집 도중 stagedSchedule 변경에 의한 스크롤 트리거 방지
+  const focusCode=apsEditor&&apsEditor.focusCode;
+  const editorHidden=apsEditor&&apsEditor.hidden;
+  useEffect(()=>{
+    if(!focusCode||editorHidden||!editorBodyRef.current)return;
+    const id=setTimeout(()=>{
+      const el=editorBodyRef.current&&editorBodyRef.current.querySelector('tr[data-focus="true"]');
+      if(el)el.scrollIntoView({block:'center',behavior:'smooth'});
+    },50);
+    return ()=>clearTimeout(id);
+  },[focusCode,editorHidden]);
   const[mpHistoryOpen,setMpHistoryOpen]=useState(false);
   const[holidaysOpen,setHolidaysOpen]=useState(false);
   const[newHolidayDate,setNewHolidayDate]=useState(()=>new Date().toISOString().slice(0,10));
@@ -900,11 +1004,15 @@ function Plan({inv,plan,mp,setMp,isA,capacity,setCapacity,sd,codes,groups,comple
     const missing=getMissingSpecGroups(groupSpec);
     if(missing.length>0){setApsGate({missing});return}
     // 3. 기간 설정 팝업 (메인 기간과 별도)
+    // 저장된 시작일이 오늘 이전이면 오늘로 자동 보정 (과거 시작 방지)
     const saved=LS('apsDateRange');
-    setApsDatePopup({
-      fromDate:saved&&saved.fromDate?saved.fromDate:startDate,
-      toDate:saved&&saved.toDate?saved.toDate:endDate,
-    });
+    const t=new Date();
+    const today=`${t.getFullYear()}-${String(t.getMonth()+1).padStart(2,'0')}-${String(t.getDate()).padStart(2,'0')}`;
+    const savedFrom=saved&&saved.fromDate;
+    const fromDate=savedFrom&&savedFrom>=today?savedFrom:today;
+    const savedTo=saved&&saved.toDate;
+    const toDate=savedTo&&savedTo>=fromDate?savedTo:endDate;
+    setApsDatePopup({fromDate,toDate});
   };
   // 모달이 열려있을 때 안전재고·capacity·코일러·휴일 변경 시 자동 재시뮬
   useEffect(()=>{
@@ -912,18 +1020,11 @@ function Plan({inv,plan,mp,setMp,isA,capacity,setCapacity,sd,codes,groups,comple
     const dts=apsModal.dates;
     const sh=extractShortages(inv,plan,codes,sd,dts,safetyDays,springMonthlyAvg,mp,completedCards);
     const ig=computeInitialGroups(mp,lineOverride,sd,dts[0],holidays,groupSpec);
-    const r1=runDueDateFirst(sh,dts,capacity,groupSpec,coilerMin,holidays,ig);
-    const r2=runChangeoverMin(sh,dts,capacity,groupSpec,coilerMin,holidays,ig);
-    const alpha=apsModal.alpha;
-    const r3=runBalanced(sh,dts,capacity,groupSpec,alpha,coilerMin,holidays,ig);
+    const r=runChangeoverMin(sh,dts,capacity,groupSpec,coilerMin,holidays,ig);
     setApsModal(prev=>prev?{
       ...prev,
       shortages:sh,initialGroups:ig,
-      scenarios:[
-        {id:'due',name:'납기 우선',desc:'납기 임박순으로 부족분만 즉시 생산. 교체 비용 무시.',result:r1,metrics:computeScenarioMetrics(r1,sh,ig)},
-        {id:'co',name:'교체 최소',desc:'같은 그룹을 묶어 한 번에 생산. 미리 적재로 교체 횟수 최소화.',result:r2,metrics:computeScenarioMetrics(r2,sh,ig)},
-        {id:'mid',name:'중간 (α='+alpha.toFixed(1)+')',desc:'납기 vs 교체 가중 평균. 슬라이더로 균형 조절.',result:r3,metrics:computeScenarioMetrics(r3,sh,ig)},
-      ]
+      result:r,metrics:computeScenarioMetrics(r,sh,ig),
     }:null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   },[safetyDays,coilerMin,capacity&&capacity.A,capacity&&capacity.B,(holidays||[]).length]);
@@ -931,20 +1032,28 @@ function Plan({inv,plan,mp,setMp,isA,capacity,setCapacity,sd,codes,groups,comple
     const sd2=opts&&opts.startDate||startDate;
     const ed2=opts&&opts.endDate||endDate;
     const dts=buildDateRange(sd2,ed2);
+    // 과거 미완료 계획 체크 — 시뮬 시작일 이전 mp 중 완료 토글 누락분
+    // 토글 누락이 있으면 시작재고가 과대 산정되어 부족 검사가 누락될 수 있음
+    let incompleteCount=0;
+    Object.keys(mp||{}).forEach(c=>{
+      Object.keys(mp[c]||{}).forEach(d=>{
+        if(d>=dts[0])return;
+        const remaining=mpRemainingQty(mp,completedCards,c,d);
+        if(remaining>0)incompleteCount++;
+      });
+    });
+    if(incompleteCount>0){
+      const pw=prompt(`과거 계획이 미완료 상태입니다 (${incompleteCount}건).\n완료 후 시도해 주세요.\n\n그래도 진행하시려면 마스터 비밀번호를 입력하세요:`);
+      if(pw===null)return; // 취소
+      if(pw!=='0928'){alert('비밀번호가 올바르지 않습니다.');return}
+    }
     const sh=extractShortages(inv,plan,codes,sd,dts,safetyDays,springMonthlyAvg,mp,completedCards);
     if(sh.length===0){alert(`기간 내 부족 품목이 없습니다.\n(안전재고 ${safetyDays}일 기준)`);return}
     const ig=computeInitialGroups(mp,lineOverride,sd,dts[0],holidays,groupSpec);
-    const r1=runDueDateFirst(sh,dts,capacity,groupSpec,coilerMin,holidays,ig);
-    const r2=runChangeoverMin(sh,dts,capacity,groupSpec,coilerMin,holidays,ig);
-    const alpha=opts&&typeof opts.alpha==='number'?opts.alpha:0.5;
-    const r3=runBalanced(sh,dts,capacity,groupSpec,alpha,coilerMin,holidays,ig);
+    const r=runChangeoverMin(sh,dts,capacity,groupSpec,coilerMin,holidays,ig);
     setApsModal({
-      dates:dts,shortages:sh,alpha,initialGroups:ig,
-      scenarios:[
-        {id:'due',name:'납기 우선',desc:'납기 임박순으로 부족분만 즉시 생산. 교체 비용 무시.',result:r1,metrics:computeScenarioMetrics(r1,sh,ig)},
-        {id:'co',name:'교체 최소',desc:'같은 그룹을 묶어 한 번에 생산. 미리 적재로 교체 횟수 최소화.',result:r2,metrics:computeScenarioMetrics(r2,sh,ig)},
-        {id:'mid',name:'중간 (α='+alpha.toFixed(1)+')',desc:'납기 vs 교체 가중 평균. 슬라이더로 균형 조절.',result:r3,metrics:computeScenarioMetrics(r3,sh,ig)},
-      ]
+      dates:dts,shortages:sh,initialGroups:ig,
+      result:r,metrics:computeScenarioMetrics(r,sh,ig),
     });
   };
   const applyScenarioToMp=(scenario)=>{
@@ -1188,87 +1297,172 @@ function Plan({inv,plan,mp,setMp,isA,capacity,setCapacity,sd,codes,groups,comple
         </div>
       </div>;
     })()}
-    {apsModal&&<div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={()=>setApsModal(null)}>
-      <div className="bg-white rounded-xl shadow-2xl p-6 w-full max-w-5xl max-h-[90vh] overflow-auto" onClick={e=>e.stopPropagation()}>
-        <div className="flex items-baseline justify-between mb-4">
-          <div>
-            <h3 className="text-base font-bold">⚡ 자동 계획 — 시나리오 선택</h3>
-            <div className="text-xs text-gray-500 mt-1">{apsModal.dates[0]} ~ {apsModal.dates[apsModal.dates.length-1]} ({apsModal.dates.length}일) · 부족 이벤트 {apsModal.shortages.length}건 · 안전재고 {safetyDays}일</div>
-          </div>
-          <button onClick={()=>setApsModal(null)} className="text-gray-400 hover:text-gray-600 text-lg">✕</button>
-        </div>
-        <div className="bg-gray-50 rounded-lg px-3 py-2 mb-4 text-xs flex flex-wrap items-center gap-x-3 gap-y-2">
-          <div className="flex items-center gap-1.5">
-            <span className="text-gray-500">중간:</span>
-            <span className="text-gray-400">교체</span>
-            <input type="range" min="0" max="1" step="0.1" value={apsModal.alpha} onChange={e=>{
-              const a=parseFloat(e.target.value);
-              const ig=apsModal.initialGroups;
-              const r3=runBalanced(apsModal.shortages,apsModal.dates,capacity,groupSpec,a,coilerMin,holidays,ig);
-              const next={...apsModal,alpha:a,scenarios:apsModal.scenarios.map(s=>s.id==='mid'?{...s,name:'중간 (α='+a.toFixed(1)+')',result:r3,metrics:computeScenarioMetrics(r3,apsModal.shortages,ig)}:s)};
-              setApsModal(next);
-            }} className="w-20"/>
-            <span className="text-gray-400">납기</span>
-            <span className="text-gray-700 font-medium tabular-nums">{apsModal.alpha.toFixed(1)}</span>
-          </div>
-          <span className="text-gray-300">|</span>
-          <div className="flex items-center gap-1.5">
-            <span className="text-gray-500">안전재고</span>
-            <input type="number" min="0" max="30" value={safetyDays} onChange={e=>{const v=parseInt(e.target.value);if(!isNaN(v)&&setSafetyDays)setSafetyDays(v)}} className="w-12 px-1.5 py-1 border border-gray-200 rounded bg-white text-center"/>
-            <span className="text-gray-400">일</span>
-          </div>
-          <span className="text-gray-300">|</span>
-          <div className="flex items-center gap-1.5">
-            <span className="text-gray-500">1라인</span>
-            <input type="number" min="1" value={(capacity&&capacity.B!=null)?capacity.B:130} onChange={e=>{const v=parseInt(e.target.value);if(!isNaN(v)&&v>=1)setCapacity({A:(capacity&&capacity.A!=null)?capacity.A:130,B:v})}} className="w-14 px-1.5 py-1 border border-gray-200 rounded bg-white text-center"/>
-          </div>
-          <div className="flex items-center gap-1.5">
-            <span className="text-gray-500">2라인</span>
-            <input type="number" min="1" value={(capacity&&capacity.A!=null)?capacity.A:130} onChange={e=>{const v=parseInt(e.target.value);if(!isNaN(v)&&v>=1)setCapacity({A:v,B:(capacity&&capacity.B!=null)?capacity.B:130})}} className="w-14 px-1.5 py-1 border border-gray-200 rounded bg-white text-center"/>
-            <span className="text-gray-400">개/일</span>
-          </div>
-          <span className="text-gray-300">|</span>
-          <div className="flex items-center gap-1.5">
-            <span className="text-gray-500">안정화</span>
-            <input type="number" min="0" max="600" value={coilerMin==null?60:coilerMin} onChange={e=>{const v=parseInt(e.target.value);if(!isNaN(v)&&v>=0&&setCoilerMin)setCoilerMin(v)}} className="w-12 px-1.5 py-1 border border-gray-200 rounded bg-white text-center" title="코일러 안정화 시간 (분/개)"/>
-            <span className="text-gray-400">분/개</span>
-          </div>
-        </div>
-        <div className="grid grid-cols-3 gap-3 mb-4">
-          {apsModal.scenarios.map(s=>(
-            <div key={s.id} className="border-2 border-gray-200 rounded-lg p-4 hover:border-blue-400 hover:shadow-md transition-all flex flex-col">
-              <div className="text-sm font-bold mb-1">{s.name}</div>
-              <div className="text-xs text-gray-500 mb-3 leading-relaxed flex-grow">{s.desc}</div>
-              <div className="space-y-1 text-xs mb-3">
-                <div className="flex justify-between"><span className="text-gray-500">교체 횟수</span><span className="font-bold">{s.metrics.changeoverCount}회</span></div>
-                <div className="flex justify-between"><span className="text-gray-500">교체 시간</span><span className="font-bold">{s.metrics.changeoverMin}분</span></div>
-                <div className="flex justify-between" title="진짜 출고 펑크(재고 마이너스) 기준"><span className="text-gray-500">납기 준수율</span><span className={`font-bold ${s.metrics.onTimeRate>=0.95?'text-emerald-600':s.metrics.onTimeRate>=0.8?'text-amber-600':'text-red-600'}`}>{(s.metrics.onTimeRate*100).toFixed(0)}%</span></div>
-                <div className="flex justify-between" title="안전재고선까지 채운 비율 (capacity 부족 시 후순위)"><span className="text-gray-500">안전재고 충족률</span><span className={`font-bold ${s.metrics.safetyRate>=0.9?'text-emerald-600':s.metrics.safetyRate>=0.7?'text-amber-600':'text-gray-500'}`}>{(s.metrics.safetyRate*100).toFixed(0)}%</span></div>
-                <div className="flex justify-between"><span className="text-gray-500">총 생산량</span><span className="font-bold">{s.metrics.totalProduced.toLocaleString()}개</span></div>
-                {s.metrics.realShort>0&&<div className="flex justify-between text-red-600"><span>출고 펑크</span><span className="font-bold">{s.metrics.realShort}개</span></div>}
-              </div>
-              <button onClick={()=>{
-                const staged=JSON.parse(JSON.stringify(s.result.schedule));
-                setApsEditor({dates:apsModal.dates,shortages:apsModal.shortages,scenarioName:s.name,originalMetrics:s.metrics,stagedSchedule:staged,initialGroups:apsModal.initialGroups});
-                setApsModal(null);
-              }} className="w-full py-2 text-xs bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium">이 플랜 선택 →</button>
+    {apsModal&&(!apsEditor||apsEditor.hidden)&&(()=>{
+      const REASON_LABEL={holiday:'휴무·주말 막힘',capacity_full:'capacity 포화',setup_conflict:'셋업 시간 점유',capacity_under10:'잔여 < 10개',out_of_range:'시뮬 기간 외',unknown:'원인 확인 필요'};
+      const r=apsModal.result;
+      // 편집기 변경 사항 반영 — staged 기반으로 부족과 메트릭 재계산 + 원본 reason/blockingDates 매칭
+      let shortagesLeft=(r&&r.shortagesLeft)||[];
+      let m=apsModal.metrics;
+      if(apsEditor){
+        const recomputed=recomputeShortagesLeft(apsEditor.stagedSchedule,apsEditor.shortages,apsEditor.dates);
+        const origMap={};
+        shortagesLeft.forEach(s=>{origMap[s.code+'_'+s.priority]=s});
+        shortagesLeft=recomputed.map(s=>{
+          const orig=origMap[s.code+'_'+s.priority];
+          return orig?{...s,line:orig.line||s.line,reason:orig.reason,blockingDates:orig.blockingDates}:s;
+        });
+        m=computeScenarioMetrics({schedule:apsEditor.stagedSchedule,shortagesLeft},apsEditor.shortages,apsEditor.initialGroups)||m;
+      }
+      const realLeft=shortagesLeft.filter(s=>s.priority==='real');
+      const safetyLeft=shortagesLeft.filter(s=>s.priority!=='real');
+      // 라인 단위 capacity 상향 추천 (방식 2): 라인별 real 펑크 합 ÷ 영업일 수
+      const holidaySet2=new Set((holidays||[]).map(h=>h.date));
+      const workdayCount=apsModal.dates.filter(d=>{const day=new Date(d).getDay();if(day===0||day===6)return false;if(holidaySet2.has(d))return false;return true}).length;
+      const lineShort={A:0,B:0};
+      realLeft.forEach(s=>{if(s.line==='A'||s.line==='B')lineShort[s.line]+=s.qty});
+      const bumpA=lineShort.A>0?Math.ceil(lineShort.A/Math.max(1,workdayCount)):0;
+      const bumpB=lineShort.B>0?Math.ceil(lineShort.B/Math.max(1,workdayCount)):0;
+      const curCapA=(capacity&&capacity.A!=null)?capacity.A:130;
+      const curCapB=(capacity&&capacity.B!=null)?capacity.B:130;
+      const applyCapBump=(line)=>{
+        if(apsEditor){alert('편집 중에는 수정이 불가능합니다.\n변경하려면 편집기에서 "취소" 후 다시 시도해 주세요.');return}
+        if(line==='A')setCapacity({A:curCapA+bumpA,B:curCapB});
+        else setCapacity({A:curCapA,B:curCapB+bumpB});
+      };
+      const sendToEditor=(focusCode)=>{
+        // 보존된 편집이 있으면 복원, 없으면 새로 시작. apsModal 은 닫지 않음 (돌아가기 위해 유지)
+        // focusCode 가 명시되면 강조, null 이면 강조 해제 (전체 편집)
+        const nextFocus=focusCode||null;
+        if(apsEditor){
+          setApsEditor(prev=>({...prev,hidden:false,focusCode:nextFocus}));
+        }else{
+          const staged=JSON.parse(JSON.stringify(r.schedule));
+          setApsEditor({dates:apsModal.dates,shortages:apsModal.shortages,scenarioName:'교체 최소',originalMetrics:m,stagedSchedule:staged,initialGroups:apsModal.initialGroups,focusCode:nextFocus,hidden:false});
+        }
+      };
+      const closeAll=()=>{
+        if(apsEditor&&!confirm('편집 내용을 버리고 닫으시겠습니까?'))return;
+        setApsModal(null);setApsEditor(null);
+      };
+      return <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={closeAll}>
+        <div className="bg-white rounded-xl shadow-2xl p-6 w-full max-w-5xl max-h-[90vh] overflow-auto" onClick={e=>e.stopPropagation()}>
+          <div className="flex items-baseline justify-between mb-4">
+            <div>
+              <h3 className="text-base font-bold">⚡ 자동 계획 — 교체 최소{apsEditor&&<span className="ml-2 text-xs text-amber-600 font-medium align-middle">📝 편집 반영</span>}</h3>
+              <div className="text-xs text-gray-500 mt-1">{apsModal.dates[0]} ~ {apsModal.dates[apsModal.dates.length-1]} ({apsModal.dates.length}일, 영업일 {workdayCount}일) · 부족 이벤트 {apsModal.shortages.length}건 · 안전재고 {safetyDays}일</div>
             </div>
-          ))}
-        </div>
-        <div className="space-y-4">
-          {apsModal.scenarios.map(s=>(
-            <div key={s.id} className="border border-gray-200 rounded-lg p-3">
-              <div className="flex items-baseline justify-between mb-2">
-                <div className="text-xs font-semibold text-gray-700">{s.name}</div>
-                <div className="text-[10px] text-gray-500">교체 {s.metrics.changeoverCount}회 · 납기 {(s.metrics.onTimeRate*100).toFixed(0)}% · 안전 {(s.metrics.safetyRate*100).toFixed(0)}%</div>
+            <button onClick={closeAll} className="text-gray-400 hover:text-gray-600 text-lg">✕</button>
+          </div>
+          {(()=>{
+            const editing=!!apsEditor;
+            const lockMsg=()=>alert('편집 중에는 수정이 불가능합니다.\n변경하려면 편집기에서 "취소" 후 다시 시도해 주세요.');
+            const inputCls=editing?'bg-gray-100 cursor-not-allowed text-gray-400':'bg-white';
+            return <div className="bg-gray-50 rounded-lg px-3 py-2 mb-4 text-xs flex flex-wrap items-center gap-x-3 gap-y-2">
+              <div className="flex items-center gap-1.5">
+                <span className="text-gray-500">안전재고</span>
+                <input type="number" min="0" max="30" value={safetyDays} readOnly={editing} onClick={editing?lockMsg:undefined} onChange={e=>{const v=parseInt(e.target.value);if(!isNaN(v)&&setSafetyDays)setSafetyDays(v)}} className={`w-12 px-1.5 py-1 border border-gray-200 rounded text-center ${inputCls}`}/>
+                <span className="text-gray-400">일</span>
               </div>
-              {renderDetailedGantt(s.result.schedule,apsModal.dates,s.name)}
+              <span className="text-gray-300">|</span>
+              <div className="flex items-center gap-1.5">
+                <span className="text-gray-500">1라인</span>
+                <input type="number" min="1" value={curCapB} readOnly={editing} onClick={editing?lockMsg:undefined} onChange={e=>{const v=parseInt(e.target.value);if(!isNaN(v)&&v>=1)setCapacity({A:curCapA,B:v})}} className={`w-14 px-1.5 py-1 border border-gray-200 rounded text-center ${inputCls}`}/>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <span className="text-gray-500">2라인</span>
+                <input type="number" min="1" value={curCapA} readOnly={editing} onClick={editing?lockMsg:undefined} onChange={e=>{const v=parseInt(e.target.value);if(!isNaN(v)&&v>=1)setCapacity({A:v,B:curCapB})}} className={`w-14 px-1.5 py-1 border border-gray-200 rounded text-center ${inputCls}`}/>
+                <span className="text-gray-400">개/일</span>
+              </div>
+              <span className="text-gray-300">|</span>
+              <div className="flex items-center gap-1.5">
+                <span className="text-gray-500">안정화</span>
+                <input type="number" min="0" max="600" value={coilerMin==null?60:coilerMin} readOnly={editing} onClick={editing?lockMsg:undefined} onChange={e=>{const v=parseInt(e.target.value);if(!isNaN(v)&&v>=0&&setCoilerMin)setCoilerMin(v)}} className={`w-12 px-1.5 py-1 border border-gray-200 rounded text-center ${inputCls}`} title="코일러 안정화 시간 (분/개)"/>
+                <span className="text-gray-400">분/개</span>
+              </div>
+              {editing&&<span className="ml-auto text-xs text-amber-600 font-medium">🔒 편집 중 — 시뮬 설정 잠금</span>}
+            </div>;
+          })()}
+          {realLeft.length>0&&<div className="border-2 border-red-300 bg-red-50 rounded-lg p-4 mb-4">
+            <div className="flex items-baseline justify-between mb-2">
+              <h4 className="text-sm font-bold text-red-700">⚠ 출고 펑크 {realLeft.length}건 — 교체 최소 시나리오로 해소 불가</h4>
+              <span className="text-xs text-red-600">납기 위반 총 {realLeft.reduce((a,b)=>a+b.qty,0)}개</span>
             </div>
-          ))}
+            <p className="text-xs text-red-700/80 mb-3 leading-relaxed">
+              · <span className="font-medium">최초 부족 발생일</span>: 그 코드의 재고가 0 미만이 되는 첫 영업일 (그 날 이미 모자란 상태)<br/>
+              · <span className="font-medium">부족량</span>: 그 날까지 누적으로 더 만들어야 했던 양 — 그 날 이전 영업일까지 보충 필요<br/>
+              · <span className="font-medium">capacity 상향</span>: 시뮬 기간 ({apsModal.dates[0].slice(5)}~{apsModal.dates[apsModal.dates.length-1].slice(5)}, 영업일 {workdayCount}일) 동안 일당 추가 생산량
+            </p>
+            <div className="flex flex-wrap gap-2 mb-3 text-xs">
+              {bumpB>0&&<div className="bg-white border border-red-200 rounded px-3 py-1.5 flex items-center gap-2">
+                <span className="text-gray-600">1라인</span>
+                <span className="font-medium tabular-nums">{curCapB} → {curCapB+bumpB} <span className="text-red-600">(+{bumpB}/일)</span></span>
+                <span className="text-gray-400 text-[10px]">× {workdayCount}일 = +{bumpB*workdayCount}개</span>
+                <button onClick={()=>applyCapBump('B')} className="ml-1 px-2 py-0.5 text-xs bg-red-600 text-white rounded hover:bg-red-700 font-medium">적용</button>
+              </div>}
+              {bumpA>0&&<div className="bg-white border border-red-200 rounded px-3 py-1.5 flex items-center gap-2">
+                <span className="text-gray-600">2라인</span>
+                <span className="font-medium tabular-nums">{curCapA} → {curCapA+bumpA} <span className="text-red-600">(+{bumpA}/일)</span></span>
+                <span className="text-gray-400 text-[10px]">× {workdayCount}일 = +{bumpA*workdayCount}개</span>
+                <button onClick={()=>applyCapBump('A')} className="ml-1 px-2 py-0.5 text-xs bg-red-600 text-white rounded hover:bg-red-700 font-medium">적용</button>
+              </div>}
+              {bumpA===0&&bumpB===0&&<div className="text-xs text-gray-500">capacity 조정으로 해소 불가 — 사유 확인 후 수동 조치 필요</div>}
+            </div>
+            <div className="bg-white rounded border border-red-100 overflow-auto" style={{maxHeight:220}}>
+              <table className="w-full text-xs">
+                <thead className="sticky top-0 bg-red-50 border-b border-red-200">
+                  <tr>
+                    <th className="text-left px-2 py-1.5 font-medium text-red-700 w-28 whitespace-nowrap">코드</th>
+                    <th className="text-left px-2 py-1.5 font-medium text-red-700">품명</th>
+                    <th className="text-center px-2 py-1.5 font-medium text-red-700 w-14 whitespace-nowrap">라인</th>
+                    <th className="text-center px-2 py-1.5 font-medium text-red-700 w-32 whitespace-nowrap" title="이 코드의 재고가 0 미만이 되는 첫 영업일">최초 부족 발생일</th>
+                    <th className="text-center px-2 py-1.5 font-medium text-red-700 w-24 whitespace-nowrap" title="발생일까지 누적으로 모자란 양 — 그 날 이전에 보충 필요">부족 (누적)</th>
+                    <th className="text-left px-2 py-1.5 font-medium text-red-700 whitespace-nowrap">원인</th>
+                    <th className="text-center px-2 py-1.5 font-medium text-red-700 w-20 whitespace-nowrap">조치</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {realLeft.map((s,i)=>{
+                    const label=REASON_LABEL[s.reason]||s.reason;
+                    const dates3=(s.blockingDates||[]).slice(0,3).map(d=>d.slice(5));
+                    const more=(s.blockingDates||[]).length>3?` 외 ${s.blockingDates.length-3}일`:'';
+                    return <tr key={i} className="border-b border-red-50 hover:bg-red-50/50">
+                      <td className="px-2 py-1.5 font-mono text-gray-600 whitespace-nowrap">{s.code}</td>
+                      <td className="px-2 py-1.5 text-gray-700">{sd[s.code]?sd[s.code].n:''}</td>
+                      <td className="px-2 py-1.5 text-center text-gray-600">{s.line==='A'?'2라인':'1라인'}</td>
+                      <td className="px-2 py-1.5 text-center text-gray-600 tabular-nums">{s.dueDate.slice(5)}</td>
+                      <td className="px-2 py-1.5 text-center font-medium text-red-600 tabular-nums">{s.qty}개</td>
+                      <td className="px-2 py-1.5 text-xs text-gray-600">{label}{dates3.length>0&&<span className="text-gray-400"> ({dates3.join(', ')}{more})</span>}</td>
+                      <td className="px-2 py-1.5 text-center">
+                        <button onClick={()=>sendToEditor(s.code)} className="px-2 py-0.5 text-xs border border-gray-300 text-gray-600 rounded hover:bg-gray-100" title="편집기에서 이 코드 행을 강조">편집</button>
+                      </td>
+                    </tr>;
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>}
+          <div className="border-2 border-gray-200 rounded-lg p-4 mb-4 flex flex-col">
+            <div className="flex items-baseline justify-between mb-3">
+              <div className="text-sm font-bold">교체 최소</div>
+              <div className="text-xs text-gray-500">같은 그룹·같은 코드 묶어 셋업 횟수 최소화</div>
+            </div>
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-2 text-xs mb-4">
+              <div><div className="text-gray-500 mb-0.5">교체 횟수</div><div className="font-bold">{m.changeoverCount}회</div></div>
+              <div><div className="text-gray-500 mb-0.5">교체 시간</div><div className="font-bold">{m.changeoverMin}분</div></div>
+              <div><div className="text-gray-500 mb-0.5" title="진짜 출고 펑크(재고 마이너스) 기준">납기 준수율</div><div className={`font-bold ${m.onTimeRate>=0.95?'text-emerald-600':m.onTimeRate>=0.8?'text-amber-600':'text-red-600'}`}>{(m.onTimeRate*100).toFixed(0)}%</div></div>
+              <div><div className="text-gray-500 mb-0.5">안전재고 충족률</div><div className={`font-bold ${m.safetyRate>=0.9?'text-emerald-600':m.safetyRate>=0.7?'text-amber-600':'text-gray-500'}`}>{(m.safetyRate*100).toFixed(0)}%</div></div>
+              <div><div className="text-gray-500 mb-0.5">총 생산량</div><div className="font-bold">{m.totalProduced.toLocaleString()}개</div></div>
+            </div>
+            <button onClick={()=>sendToEditor(null)} className="w-full py-2 text-xs bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium">{apsEditor?'편집 이어서 →':'편집기로 →'}</button>
+          </div>
+          <div className="border border-gray-200 rounded-lg p-3">
+            <div className="text-xs font-semibold text-gray-700 mb-2">전체 일정</div>
+            {renderDetailedGantt(r.schedule,apsModal.dates,'교체 최소')}
+          </div>
         </div>
-      </div>
-    </div>}
-    {apsEditor&&(()=>{
+      </div>;
+    })()}
+    {apsEditor&&!apsEditor.hidden&&(()=>{
       const fmt2=d=>{const dt=new Date(d);const dd=['일','월','화','수','목','금','토'];return `${dt.getMonth()+1}/${dt.getDate()}(${dd[dt.getDay()]})`};
       const orig=apsEditor.originalMetrics;
       const cur=editorMetrics||orig;
@@ -1331,10 +1525,12 @@ function Plan({inv,plan,mp,setMp,isA,capacity,setCapacity,sd,codes,groups,comple
                   <th className="text-center px-2 py-2 font-medium text-gray-500 w-12">삭제</th>
                 </tr>
               </thead>
-              <tbody>
+              <tbody ref={editorBodyRef}>
                 {rows.length===0?<tr><td colSpan={7} className="text-center py-8 text-gray-400">편집할 항목이 없습니다 (모두 삭제됨)</td></tr>:
-                  rows.map((r,ri)=>(
-                    <tr key={`${r.date}_${r.line}_${r.idx}_${ri}`} className="border-b border-gray-100 hover:bg-gray-50">
+                  rows.map((r,ri)=>{
+                    const isFocused=apsEditor.focusCode&&r.it.code===apsEditor.focusCode;
+                    return (
+                    <tr key={`${r.date}_${r.line}_${r.idx}_${ri}`} data-focus={isFocused?'true':undefined} className={`border-b ${isFocused?'bg-amber-100 border-amber-300 shadow-[inset_3px_0_0_0_rgb(245,158,11)]':'border-gray-100 hover:bg-gray-50'}`}>
                       <td className="px-3 py-1.5 text-gray-500">{r.showDate?fmt2(r.date):''}</td>
                       <td className="px-2 py-1.5">
                         <select value={r.line} onChange={e=>updateStagedItem(r.line,r.date,r.idx,{line:e.target.value})}
@@ -1358,23 +1554,22 @@ function Plan({inv,plan,mp,setMp,isA,capacity,setCapacity,sd,codes,groups,comple
                           className="text-gray-400 hover:text-red-500" title="삭제">🗑</button>
                       </td>
                     </tr>
-                  ))
+                    );
+                  })
                 }
               </tbody>
             </table>
           </div>
           <div className="flex gap-2 mt-4">
-            <button onClick={()=>{
-              if(confirm('편집 내용을 버리고 시나리오 선택 화면으로 돌아갈까요?')){
-                setApsEditor(null);
-                runScenarioSim();
-              }
-            }} className="px-3 py-2 text-xs border border-gray-200 text-gray-500 rounded-lg hover:bg-gray-50">← 시나리오 다시 선택</button>
+            <button onClick={()=>setApsEditor(prev=>({...prev,hidden:true}))} className="px-3 py-2 text-xs border border-gray-200 text-gray-500 rounded-lg hover:bg-gray-50" title="편집 내용 보존, 시나리오 화면 다시 보기">← 돌아가기</button>
             <button onClick={()=>{if(confirm('편집 내용을 버리고 닫으시겠습니까?'))setApsEditor(null)}} className="px-3 py-2 text-xs border border-gray-200 text-gray-500 rounded-lg hover:bg-gray-50">취소</button>
             <div className="flex-1"/>
             <button onClick={()=>{
               if(rows.length===0){alert('편집할 항목이 없습니다.');return}
-              if(confirm(`확정 시 시뮬 기간(${apsEditor.dates.length}일)의 mp가 위 내용으로 덮어쓰여집니다.\n그 외 일자는 보존됩니다.\n\n계속하시겠습니까?`))commitEditor();
+              if(confirm(`확정 시 시뮬 기간(${apsEditor.dates.length}일)의 mp가 위 내용으로 덮어쓰여집니다.\n그 외 일자는 보존됩니다.\n\n계속하시겠습니까?`)){
+                commitEditor();
+                setApsModal(null);
+              }
             }} className="px-6 py-2 text-xs bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium">✓ 확정 적용</button>
           </div>
         </div>
@@ -2512,7 +2707,7 @@ function App(){
         {isMobile&&isAdminAccount&&<div className="mb-3 px-3 py-2 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-700 leading-relaxed">
           📱 모바일은 <span className="font-medium">조회 전용</span>입니다. 편집·자동 계획·업로드는 PC에서 진행해주세요.
         </div>}
-        {tab==='dashboard'&&<Dash inv={inv} map={map} hist={hist} onUp={handleUp} isA={isA} plan={plan} mp={mp} sd={sd} codes={codes} groups={groups} completedCards={completedCards} carryLog={carryLog}/>}
+        {tab==='dashboard'&&<Dash inv={inv} map={map} hist={hist} onUp={handleUp} isA={isA} plan={plan} mp={mp} sd={sd} codes={codes} groups={groups} completedCards={completedCards} carryLog={carryLog} productOutbound={productOutbound} groupSpec={groupSpec} goToTab={setTab}/>}
         {tab==='planning'&&<Plan inv={inv} plan={plan} mp={mp} setMp={setMp} isA={isA} capacity={capacity} setCapacity={c=>{setCapacity(c);LS('capacity',c);}} sd={sd} codes={codes} groups={groups} completedCards={completedCards} toggleComplete={toggleComplete} carryLog={carryLog} setCarryLog={setCarryLog} groupSpec={groupSpec} setGroupSpec={setGroupSpec} safetyDays={safetyDays} setSafetyDays={d=>{setSafetyDays(d);LS('safetyDays',d);}} productOutbound={productOutbound} springMonthlyAvg={springMonthlyAvg} coilerMin={coilerMin} setCoilerMin={m=>{setCoilerMin(m);LS('coilerMin',m);}} goToTab={setTab} mpHistory={mpHistory} pushMpSnapshot={pushMpSnapshot} holidays={holidays} setHolidays={h=>{setHolidays(h);LS('holidays',h);}}/>}
         {tab==='mapping'&&isA&&<MapMgr map={map} setMap={setMap} onUp={handleMapUp} sd={sd} hist={hist}/>}
         {tab==='groupSpec'&&isA&&<GroupSpecMgr groupSpec={groupSpec} setGroupSpec={setGroupSpec}/>}
