@@ -1298,7 +1298,7 @@ function Plan({inv,plan,mp,setMp,isA,capacity,setCapacity,sd,codes,groups,comple
       </div>;
     })()}
     {apsModal&&(!apsEditor||apsEditor.hidden)&&(()=>{
-      const REASON_LABEL={holiday:'휴무·주말 막힘',capacity_full:'capacity 포화',setup_conflict:'셋업 시간 점유',capacity_under10:'잔여 < 10개',out_of_range:'시뮬 기간 외',unknown:'원인 확인 필요'};
+      const REASON_LABEL={holiday:'휴무·주말 막힘',capacity_full:'capacity 포화',setup_conflict:'셋업 시간 점유',capacity_under10:'잔여 < 10개',blocked_by_prior:'다른 그룹이 capacity 점유',out_of_range:'시뮬 기간 외',unknown:'원인 확인 필요'};
       const r=apsModal.result;
       // 편집기 변경 사항 반영 — staged 기반으로 부족과 메트릭 재계산 + 원본 reason/blockingDates 매칭
       let shortagesLeft=(r&&r.shortagesLeft)||[];
@@ -1387,11 +1387,6 @@ function Plan({inv,plan,mp,setMp,isA,capacity,setCapacity,sd,codes,groups,comple
               <h4 className="text-sm font-bold text-red-700">⚠ 출고 펑크 {realLeft.length}건 — 교체 최소 시나리오로 해소 불가</h4>
               <span className="text-xs text-red-600">납기 위반 총 {realLeft.reduce((a,b)=>a+b.qty,0)}개</span>
             </div>
-            <p className="text-xs text-red-700/80 mb-3 leading-relaxed">
-              · <span className="font-medium">최초 부족 발생일</span>: 그 코드의 재고가 0 미만이 되는 첫 영업일 (그 날 이미 모자란 상태)<br/>
-              · <span className="font-medium">부족량</span>: 그 날까지 누적으로 더 만들어야 했던 양 — 그 날 이전 영업일까지 보충 필요<br/>
-              · <span className="font-medium">capacity 상향</span>: 시뮬 기간 ({apsModal.dates[0].slice(5)}~{apsModal.dates[apsModal.dates.length-1].slice(5)}, 영업일 {workdayCount}일) 동안 일당 추가 생산량
-            </p>
             <div className="flex flex-wrap gap-2 mb-3 text-xs">
               {bumpB>0&&<div className="bg-white border border-red-200 rounded px-3 py-1.5 flex items-center gap-2">
                 <span className="text-gray-600">1라인</span>

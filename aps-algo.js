@@ -351,11 +351,15 @@ function placeShortages(orderedShortages,dates,capacity,groupSpec,coilerMin,holi
         }
         cursor++;
       }
-      // 남은 부족 shortagesLeft
+      // 남은 부족 shortagesLeft. trace 비어있음 = 선순위 cluster 가 cursor 를 다 점유해 시도조차 못 함
       groupItems.forEach((it,i)=>{
         if(remainings[i]>0){
-          const summary=summarizeReason(traces[i]);
-          shortagesLeft.push({...it,qty:remainings[i],line,reason:summary.reason,blockingDates:summary.blockingDates});
+          if(traces[i].length===0){
+            shortagesLeft.push({...it,qty:remainings[i],line,reason:'blocked_by_prior',blockingDates:[]});
+          }else{
+            const summary=summarizeReason(traces[i]);
+            shortagesLeft.push({...it,qty:remainings[i],line,reason:summary.reason,blockingDates:summary.blockingDates});
+          }
         }
       });
       qi=qj;
