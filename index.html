@@ -1032,12 +1032,14 @@ function Plan({inv,plan,mp,setMp,isA,capacity,setCapacity,sd,codes,groups,comple
     const sd2=opts&&opts.startDate||startDate;
     const ed2=opts&&opts.endDate||endDate;
     const dts=buildDateRange(sd2,ed2);
-    // 과거 미완료 계획 체크 — 시뮬 시작일 이전 mp 중 완료 토글 누락분 (드래그 이월은 완료로 간주)
-    // 토글 누락이 있으면 시작재고가 과대 산정되어 부족 검사가 누락될 수 있음
+    // 과거 미완료 계획 체크 — "오늘 이전" mp 중 완료 토글 누락분 (드래그 이월은 완료로 간주)
+    // today~startDate 사이 진행 중 계획은 차단 대상 아님 (미래 시작일로 자동 계획 수립 가능)
+    const _t=new Date();
+    const todayYMD=`${_t.getFullYear()}-${String(_t.getMonth()+1).padStart(2,'0')}-${String(_t.getDate()).padStart(2,'0')}`;
     let incompleteCount=0;
     Object.keys(mp||{}).forEach(c=>{
       Object.keys(mp[c]||{}).forEach(d=>{
-        if(d>=dts[0])return;
+        if(d>=todayYMD)return;
         const remaining=mpRemainingQty(mp,completedCards,c,d,carryLog);
         if(remaining>0)incompleteCount++;
       });
