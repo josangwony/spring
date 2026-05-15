@@ -27,6 +27,14 @@ const SPEC_OPTIONS={
 };
 const SPEC_LABEL={wire:'강선',height:'높이',fabric:'부직포'};
 
+// === 그룹별 생산 속도 계수 (1.0 = 기본). 1보다 작으면 그 그룹은 느림 ===
+// 슬로우 7조닝: 3개 코일러 각각 다른 물성(s/m/f) 사용해 1개씩만 뽑힘 → 1/3 속도
+// 기본값(다른 그룹): 1.0 (3개 코일러 동일 물성으로 3개씩 뽑힘)
+const GROUP_PRODUCTION_RATE={
+  '슬로우 7조닝':1/3,
+};
+function getGroupRate(group){return GROUP_PRODUCTION_RATE[group]||1.0}
+
 // === 코일러 안정화(형상 잡는 시간) ===
 // 코일러 1개 변경 = 60분(기본). 그룹 페어별 코일러 변경 개수 매트릭스 (기본 3, 일부 공유 페어만 별도)
 const COILER_DIFF_PAIRS={
@@ -150,8 +158,9 @@ function normalizeCapacity(v){
 function totalCapacity(c){const n=normalizeCapacity(c);return n.A+n.B}
 
 // 시작일 이전 미반영 mp 잔여량 산출
-// mp[c][d] - Σ completedCards[c_d_*].qty (AB 분할의 라인별 완료를 모두 차감)
-function mpRemainingQty(mp,completedCards,code,date){
+// mp[c][d] - Σ completedCards[c_d_*].qty - Σ carryLog 에서 이 날짜에서 다른 날로 이월된 양
+// AB 분할의 라인별 완료 + 드래그 이월 처리를 모두 반영
+function mpRemainingQty(mp,completedCards,code,date,carryLog){
   const v=mp&&mp[code]?mp[code][date]:undefined;
   const mpQty=typeof v==='object'?(v&&v.qty||0):(v||0);
   if(mpQty<=0)return 0;
@@ -165,7 +174,16 @@ function mpRemainingQty(mp,completedCards,code,date){
       }
     });
   }
-  return Math.max(0,mpQty-doneQty);
+  // 이 날짜(date) 에서 다른 날로 이월된 양 차감 — 사용자가 드래그로 이월 처리하면 그 양은 더 이상 미완료가 아님
+  let carriedOut=0;
+  if(carryLog&&carryLog.length){
+    carryLog.forEach(l=>{
+      if(l.code===code&&l.fromDate===date){
+        carriedOut+=l.qty||0;
+      }
+    });
+  }
+  return Math.max(0,mpQty-doneQty-carriedOut);
 }
 
 // 안전재고 제한 그룹: 자주 교체 걸리는 그룹은 메인 사이즈(SS)만 안전재고 유지
@@ -189,7 +207,7 @@ function shouldApplySafety(group,code,sd){
 // priority='real' (재고<0, 출고 펑크): 매번 발생 시점에 push (한 시뮬 안에 여러 번 가능)
 // priority='safety' (0≤재고<안전재고선): SAFETY_TARGETS 에 등록된 그룹·사이즈만 시뮬 끝 시점 미달분 1회 push
 //                                       그 외 그룹·사이즈는 safety 무시 (실제 필요량만 투입)
-function extractShortages(inv,plan,codes,sd,dates,safetyDays,springMonthlyAvg,mp,completedCards){
+function extractShortages(inv,plan,codes,sd,dates,safetyDays,springMonthlyAvg,mp,completedCards,carryLog){
   const shortages=[];
   const simStart=dates[0];
   codes.forEach(c=>{
@@ -200,11 +218,11 @@ function extractShortages(inv,plan,codes,sd,dates,safetyDays,springMonthlyAvg,mp
     const dailyAvg=monthly/21;
     const safetyLine=safetyDays*dailyAvg;
     let run=inv[c]||0;
-    // 시뮬 시작일 이전: 미완료 mp(미반영 생산) 가산
+    // 시뮬 시작일 이전: 미완료 mp(미반영 생산) 가산. carryLog 이월 양은 차감
     if(mp&&mp[c]){
       Object.keys(mp[c]).forEach(d=>{
         if(d>=simStart)return;
-        run+=mpRemainingQty(mp,completedCards,c,d);
+        run+=mpRemainingQty(mp,completedCards,c,d,carryLog);
       });
     }
     // 시뮬 시작일 이전: plan 출고 차감
@@ -320,6 +338,8 @@ function placeShortages(orderedShortages,dates,capacity,groupSpec,coilerMin,holi
         for(let ord=0;ord<activeIdxs.length;ord++){
           const i=activeIdxs[ord];
           const itemGroup=groupItems[i].group;
+          // 그룹별 생산 효율 반영 — 슬로우 7조닐 처럼 느린 그룹은 effective mpu 가 커짐 (1개당 더 오래)
+          const effectiveMpu=mpu/getGroupRate(itemGroup);
           let setup=0;
           if(!setupApplied&&firstWorkOnDay&&itemGroup!==prev){
             setup=changeoverTime(prev,itemGroup,groupSpec,coilerMin);
@@ -330,7 +350,7 @@ function placeShortages(orderedShortages,dates,capacity,groupSpec,coilerMin,holi
             traces[i].push({date:d,reason:setup>0?'setup_conflict':'capacity_full'});
             continue;
           }
-          const canMake=Math.floor(remainMin/mpu);
+          const canMake=Math.floor(remainMin/effectiveMpu);
           const canMake10=Math.floor(canMake/10)*10;
           if(canMake10<10){
             traces[i].push({date:d,reason:'capacity_under10'});
@@ -343,7 +363,7 @@ function placeShortages(orderedShortages,dates,capacity,groupSpec,coilerMin,holi
             continue;
           }
           day.items.push({code:groupItems[i].code,group:itemGroup,qty:make,changeoverMin:setup});
-          day.usedMin+=setup+make*mpu;
+          day.usedMin+=setup+make*effectiveMpu;
           remainings[i]-=make;
           prev=itemGroup;
           dayMadeAny=true;
